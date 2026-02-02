@@ -73,7 +73,9 @@
                          "adt", 
                          "respiratory_support", 
                          "medication_admin_continuous", 
-                         "crrt_therapy")
+                         "crrt_therapy",
+                         "vitals",
+                         "labs")
     
     # List all CLIF files in the directory
     clif_table_filenames <- list.files(path = tables_location, 
@@ -258,6 +260,21 @@
     select(hospitalization_id, crrt_mode_category, recorded_dttm) |> 
     inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
     compute()
+  
+  clif_labs <- clif_labs |>
+    filter(lab_category %in% c("ph_arterial", "ph_venous")) |>
+    # ensure same datatype
+    mutate(hospitalization_id = as.character(hospitalization_id)) |>
+    inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+    compute()
+  
+  clif_vitals <- clif_vitals |>
+    filter(vital_category %in% c("spo2")) |>
+    # ensure same datatype
+    mutate(hospitalization_id = as.character(hospitalization_id)) |>
+    inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+    compute()
+    
 } # -----------------  End merging hospital blocks with CLIF tables
 } # -------  End creating and merging hospital blocks
 
