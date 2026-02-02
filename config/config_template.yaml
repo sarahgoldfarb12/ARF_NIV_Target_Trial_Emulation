@@ -1,0 +1,13 @@
+# Add local paath to CLIF tables
+tables_location: "path/to/clif/data"
+
+# Add local path to project output location
+project_location: "path/to/this/project"
+
+# Add your institution name
+institution: "Your Site Name"
+# Add your local time zone
+# Options are: EST = 'America/New_York', CST = 'America/Chicago', PST = 'America/Los_Angeles'
+time_zone: "America/Chicago"
+
+file_type: "parquet"

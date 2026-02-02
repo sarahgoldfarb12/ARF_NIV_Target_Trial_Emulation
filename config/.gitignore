@@ -1,1 +1,2 @@
-config.json
+# Ensures that the information in the config file is not pushed to github remote repository
+config.yaml

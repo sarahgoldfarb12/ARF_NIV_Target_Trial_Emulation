@@ -30,3 +30,5 @@ initialize_renv.R
 # ignore pdf reports and rendered html
 *.pdf
 *.html
+
+private_tables/
