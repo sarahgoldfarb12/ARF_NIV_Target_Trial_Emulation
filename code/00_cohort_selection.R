@@ -887,6 +887,43 @@ cohort_size <- data.frame(
     cat("Exclusion criteria 7: Code status 'comfort care only' complete!\n")
   } # -----------------  End Exclusion criteria 7: Code status "comfort care only" at t = 0
   
+  { # -----------------  Exclusion criteria 8: Hospital is not IMC capable
+    
+    cat("Applying exclusion criteria 8: Hospital is not IMC capable...\n")
+    
+    # List which hospitals are IMC capable
+    hospital_imc_capability <- final_cohort |>
+      # Group by presenting hospital (not block)
+      group_by(first_hospital_id) |>
+      # Categorize rows as imc_capable == 1 if number of rows for traige_location == "imc" >= IMC_CAPABLE_CUTOFF 
+      summarise(
+        total_rows = n(),
+        imc_rows = sum(as.integer(tolower(triage_location) == "stepdown", na.rm = TRUE)),
+        imc_capable = ifelse((imc_rows / total_rows) >= IMC_CAPABLE_CUTOFF, 1, 0),
+        .groups = "drop"
+      ) |>
+      # Select only relevant columns
+      select(first_hospital_id, imc_capable)
+    
+    # Only keep encounters at hospitals that are IMC capable
+    final_cohort <- final_cohort |>
+      inner_join(hospital_imc_capability |>
+                   filter(imc_capable==1) |>
+                   select(-imc_capable), 
+                 by = "first_hospital_id")
+    
+    # Update cohort size 
+    cohort_size <- cohort_size |>
+      add_row(
+        step = 11,
+        description = "Excluding: Encounters at hospitals that are not IMC capable",
+        n_encounters = nrow(final_cohort),
+        n_patients = nrow(final_cohort |> select(patient_id) |> distinct())
+      )
+    
+    cat("Exclusion criteria 8: Hospital is not IMC capable complete!\n")
+  } # -----------------  End Exclusion criteria 8: Hospital is not IMC capable
+  
 } # -------  End exclusion criteria
 
 { # -------  Output cohort
@@ -922,7 +959,7 @@ cohort_size <- data.frame(
   # Output cohort size for non-pandemic
   write_csv(cohort_size |>
               add_row(
-                step = 11,
+                step = 12,
                 description = "Sensitivity Analysis: Exclude encounters presenting to ED during COVID pandemic",
                 n_encounters = nrow(no_pandemic_cohort),
                 n_patients = nrow(no_pandemic_cohort |> select(patient_id) |> distinct())
@@ -949,10 +986,5 @@ cohort_size <- data.frame(
     mutate(hospitalization_id = as.character(hospitalization_id))
   
   # Save the subset of hospital blocks
-  write_csv(hospital_block_key, paste0(project_location, "/private_tables/hospital_block_key_all_encounters.csv"))
-
-  write_csv(hospital_block_key |>
-              filter(hospital_block_id  %in% final_cohort_trimmed$hospital_block_id), 
-            paste0(project_location, "/private_tables/hospital_block_key_one_encounter_per_patient.csv"))
-  
+  write_csv(hospital_block_key, paste0(project_location, "/private_tables/hospital_block_key.csv"))
 } # ------- End saving hospital block info
