@@ -50,9 +50,6 @@
     site_time_zone <- config$time_zone
     file_type <- config$file_type
     
-    # Cutoff for describing hospital as IMC capable
-    IMC_CAPABLE_CUTOFF <- global_config$imc_capable_cutoff
-    
     # Study start and end
     STUDY_START <- as.POSIXct(global_config$study_start, tz=site_time_zone) # Start time
     STUDY_END <- as.POSIXct(global_config$study_end, tz=site_time_zone) # End time
@@ -89,7 +86,7 @@
                          "crrt_therapy",
                          "vitals",
                          "labs",
-                         "code_status")
+                         "hospital_diagnosis")
     
     # List all CLIF files in the directory
     clif_table_filenames <- list.files(path = tables_location, 
@@ -161,22 +158,6 @@
   { # -----------------  Defining global variables and outlier thresholds
     # Outlier thresholds
     outlier_thresholds <- read_csv(paste0(project_location, "/outlier-thresholds/project_outlier_thresholds.csv"), show_col_types=FALSE)
-    
-    ED_ALLOWED_LOCATIONS <- c("ed", "procedural", "other") # Lists locations that would be considered still part of ED time
-    
-    HOSPITAL_BLOCK_TIME_HRS <- 6 # Maximum number of hours allowed between hospitalizations to make them blocked together
-    
-    
-    # pH limit to include
-    PH_CUTOFF <- 7.1
-    
-    # SF limit to include
-    SF_CUTOFF <- 120
-    
-    
-    # Age limits for study, defined by outlier_thresholds file
-    AGE_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "age_at_admission"]
-    AGE_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "age_at_admission"]
   } # -----------------  End defining global variables and outlier thresholds
   
   cat("End Setup!\n")
