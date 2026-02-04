@@ -32,3 +32,5 @@ initialize_renv.R
 *.html
 
 private_tables/
+*_project_output/
+config/config.yaml
