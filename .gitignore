@@ -35,3 +35,4 @@ private_tables/
 *_project_output/
 config/config.yaml
 ARF_NIV_Target_Trial_Emulation.Rproj
+*_Lizi.R/
