@@ -213,7 +213,7 @@
     
     cat("---Vitals starting...\n")
     clif_vitals <- clif_vitals |>
-      filter(vital_category %in% c("temp_c","heart_rate","sbp","dbp","map","spo2", "height_kg", "weight_kg")) |>
+      filter(vital_category %in% c("temp_c","heart_rate","map","spo2", "height_kg", "weight_kg")) |>
       inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
       compute()
     cat("---Vitals complete!\n")
@@ -236,11 +236,11 @@
 { # -----------------  Defining baseline table and varying characteristics 
   baseline_chars <- final_cohort |>
     select(
-      hospital_block_id, # already saved
-      year, # already saved
-      hospital_id=first_hospital_id, # already saved
-      patient_id, # already saved
-      t0, # time enrolled in trial (4 hours after starting NIV)
+      hospital_block_id, # already saved in final_cohort
+      year, # already saved (as start_niv; rename and cast to int for year)
+      hospital_id=first_hospital_id, # already saved, already saved in final_cohort
+      patient_id, # already saved, already saved in final_cohort
+      t0, # time enrolled in trial (4 hours after starting NIV), already saved in final_cohort
       age,# clif_patient
       sex, # clif_patient
       bmi, # clif_vitals
@@ -253,25 +253,27 @@
       elixhauser_index # clif_hospital_diagnosis
     )
   
-  varying_chars <- c("unit_location", # adt
-                     "temperature", # clif_vitals
-                     "heart_rate", # clif_vitals
-                     "map", # clif_vitals
-                     "resp_device", # clif_respiratory_support
-                     "sf_ratio", # clif_vitals, clif_respiratory_support
-                     "pf_ratio", # clif_labs, clif_respiratory_support
-                     "co2_v_a", # clif_labs
-                     "ph_v_a", # clif_labs
-                     "sodium", # clif_labs
-                     "potassium", # clif_labs
-                     "bicarb", # clif_labs
-                     "wbc", # clif_labs
-                     "lactate", # clif_labs
-                     "anti_hypertensive_drip", # clif_medication_admin_continuous
-                     "pressors", # clif_medication_admin_continuous
-                     "naloxone", # clif_medication_admin_continuous, clif_medication_admin_intermittent
-                     "non_resp_sofa", # clif_labs, clif_vitals, clif_medication_admin_continuous, clif_patient_assessments
-                     "code_status" # clif_code_status
-                     )
+  # TODO later
+  # varying_chars <- c("unit_location", # adt
+  #                    "temperature", # clif_vitals
+  #                    "heart_rate", # clif_vitals
+  #                    "map", # clif_vitals
+  #                    "resp_device", # clif_respiratory_support
+  #                    "sf_ratio", # clif_vitals, clif_respiratory_support
+  #                    "pf_ratio", # clif_labs, clif_respiratory_support
+  #                    "co2_v_a", # clif_labs
+  #                    "ph_v_a", # clif_labs
+  #                    "sodium", # clif_labs
+  #                    "potassium", # clif_labs
+  #                    "bicarb", # clif_labs
+  #                    "wbc", # clif_labs
+  #                    "lactate", # clif_labs
+  #                    "anti_hypertensive_drip", # clif_medication_admin_continuous
+  #                    "pressors", # clif_medication_admin_continuous
+  #                    "naloxone", # clif_medication_admin_continuous, clif_medication_admin_intermittent
+  #                    "non_resp_sofa", # clif_labs, clif_vitals, clif_medication_admin_continuous, clif_patient_assessments
+  #                    "code_status" # clif_code_status
+  #                    )
+  
 } # -----------------  End defining baseline table and varying characteristics 
 
