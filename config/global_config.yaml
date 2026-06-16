@@ -4,12 +4,8 @@
 imc_capable_cutoff: 0.05
 
 # Study timeframe
-study_start: "2018-01-01"
-study_end: "2024-12-31"
-
-# COVID pandemic timeframe
-covid_start: "2020-03-01"
-covid_end: "2022-02-28"
+study_start: "2021-01-01"
+study_end: "2025-12-31"
 
 # Definitions of respiratory devices
 niv_devices:

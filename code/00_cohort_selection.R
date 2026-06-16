@@ -57,10 +57,6 @@
     STUDY_START <- as.POSIXct(global_config$study_start, tz=site_time_zone) # Start time
     STUDY_END <- as.POSIXct(global_config$study_end, tz=site_time_zone) # End time
     
-    
-    COVID_START <- as.POSIXct(global_config$covid_start, tz=site_time_zone) # Start time
-    COVID_END <- as.POSIXct(global_config$covid_end, tz=site_time_zone) # End time
-    
     # Device names that are included as NIV
     NIV_NAMES <- global_config$niv_devices 
     
@@ -981,6 +977,9 @@ cohort_size <- data.frame(
 } # -------  End output cohort: no covid sensitivity analysis
 
 { # ------- Saving hospital block info
+  
+  
+  
   hospital_block_key <- hospital_block_key |>
     filter(hospital_block_id  %in% final_cohort$hospital_block_id) |>
     mutate(hospitalization_id = as.character(hospitalization_id))

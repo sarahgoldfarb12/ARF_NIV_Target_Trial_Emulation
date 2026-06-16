@@ -79,15 +79,17 @@
   { # -----------------  Loading required CLIF tables -----------------
     
     # Tables that should be set to TRUE for this project
-    required_tables <- c("hospitalization", 
-                         "adt", 
-                         "respiratory_support", 
-                         "medication_admin_continuous", 
-                         "crrt_therapy",
-                         "vitals",
-                         "labs",
-                         "hospital_diagnosis")
-    
+    required_tables <- c("patient", # age, sex
+                         "vitals", # height (for bmi), weight (for bmi), temperature, hr, map, spo2 (for sf)
+                         "adt",  # unit_location
+                         "hospital_diagnosis", # elixhuaser comorbidities
+                         "respiratory_support", # fio2 (for sf, pf), resp_device
+                         "medication_admin_continuous", # anti_hypertensive_drip, naloxone
+                         "labs", # pao2 (for pf), co2, ph, albumin, sodium, potassium, bicarb, wbc, lactate, plt, tbili, cr
+                         "patient_assessments", # GCS (for non resp sofa)
+                         "code_status" # code_status
+                         )
+
     # List all CLIF files in the directory
     clif_table_filenames <- list.files(path = tables_location, 
                                        pattern = paste0("^clif_.*\\.", file_type, "$"), 
@@ -155,11 +157,121 @@
     
   } # -----------------  End loading required CLIF tables
   
-  { # -----------------  Defining global variables and outlier thresholds
+  { # -----------------  Loading cohort data, hosp key, global variables, outlier thresholds
+    # No pandemic cohort is final cohort
+    final_cohort <- read_csv(paste0(project_location,"/private_tables/no_pandemic_one_encounter_per_patient.csv"), 
+                             show_col_types=FALSE)
+    
+    hospital_block_key <- read_csv(paste0(project_location, "/private_tables/hospital_block_key.csv"), 
+                                   show_col_types=FALSE)
+    
+    # Add the discharge information to the final cohort
+    final_cohort <- final_cohort |>
+      left_join(hospital_block_key |>
+                  select(hospital_block_id, 
+                         block_start=block_start_admit, 
+                         block_end=block_end_discharge,
+                         discharge_location) |>
+                  distinct(),
+                by = "hospital_block_id")
+    
     # Outlier thresholds
-    outlier_thresholds <- read_csv(paste0(project_location, "/outlier-thresholds/project_outlier_thresholds.csv"), show_col_types=FALSE)
+    outlier_thresholds <- read_csv(paste0(project_location, "/outlier-thresholds/project_outlier_thresholds.csv"), 
+                                   show_col_types=FALSE)
+    
   } # -----------------  End defining global variables and outlier thresholds
+  
+  { # -----------------  Subsetting CLIF tables
+    
+    
+    required_tables <- c("patient", # age, sex
+                         "vitals", # height (for bmi), weight (for bmi), temperature, hr, map, spo2 (for sf)
+                         "adt",  # unit_location
+                         "hospital_diagnosis", # elixhuaser comorbidities
+                         "respiratory_support", # fio2 (for sf, pf), resp_device
+                         "medication_admin_continuous", # anti_hypertensive_drip, naloxone
+                         "labs", # pao2 (for pf), co2, ph, albumin, sodium, potassium, bicarb, wbc, lactate, plt, tbili, cr
+                         "patient_assessments", # GCS (for non resp sofa)
+                         "code_status" # code_status
+    )
+    
+    cat("Subsetting CLIF tables...\n")
+    
+    hospital_block_key_obj <- arrow::arrow_table(
+      hospital_block_key |>
+        select(patient_id,
+               hospitalization_id,
+               hospital_block_id) |>
+        filter(hospital_block_id %in% final_cohort$hospital_block_id))
+
+    cat("---Patient starting...\n")
+    clif_adt <- clif_adt |>
+      select(patient_id, birth_date, sex_category) |>
+      inner_join(hospital_block_key_obj, by = c("patient_id")) |>
+      compute()
+    cat("---Patient complete!\n") 
+    
+    cat("---Vitals starting...\n")
+    clif_vitals <- clif_vitals |>
+      filter(vital_category %in% c("temp_c","heart_rate","sbp","dbp","map","spo2", "height_kg", "weight_kg")) |>
+      inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+      compute()
+    cat("---Vitals complete!\n")
+    
+    cat("---ADT starting...\n")
+    clif_adt <- clif_adt |>
+      select(hospitalization_id, in_dttm, out_dttm, location_name, location_category) |>
+      inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+      compute()
+    cat("---ADT complete!\n")
+    
+    
+  } # -----------------  End subsetting CLIF tables
   
   cat("End Setup!\n")
   
 }# -------  End setup
+
+
+{ # -----------------  Defining baseline table and varying characteristics 
+  baseline_chars <- final_cohort |>
+    select(
+      hospital_block_id, # already saved
+      year, # already saved
+      hospital_id=first_hospital_id, # already saved
+      patient_id, # already saved
+      t0, # time enrolled in trial (4 hours after starting NIV)
+      age,# clif_patient
+      sex, # clif_patient
+      bmi, # clif_vitals
+      albumin, # clif_labs
+      chronic_lung, # clif_hospital_diagnosis
+      pulmonary_vasc, # clif_hospital_diagnosis
+      renal_failure, # clif_hospital_diagnosis
+      liver_disease, # clif_hospital_diagnosis
+      met_cancer, # clif_hospital_diagnosis
+      elixhauser_index # clif_hospital_diagnosis
+    )
+  
+  varying_chars <- c("unit_location", # adt
+                     "temperature", # clif_vitals
+                     "heart_rate", # clif_vitals
+                     "map", # clif_vitals
+                     "resp_device", # clif_respiratory_support
+                     "sf_ratio", # clif_vitals, clif_respiratory_support
+                     "pf_ratio", # clif_labs, clif_respiratory_support
+                     "co2_v_a", # clif_labs
+                     "ph_v_a", # clif_labs
+                     "sodium", # clif_labs
+                     "potassium", # clif_labs
+                     "bicarb", # clif_labs
+                     "wbc", # clif_labs
+                     "lactate", # clif_labs
+                     "anti_hypertensive_drip", # clif_medication_admin_continuous
+                     "pressors", # clif_medication_admin_continuous
+                     "naloxone", # clif_medication_admin_continuous, clif_medication_admin_intermittent
+                     "non_resp_sofa", # clif_labs, clif_vitals, clif_medication_admin_continuous, clif_patient_assessments
+                     "code_status" # clif_code_status
+                     )
+} # -----------------  End defining baseline table and varying characteristics 
+
