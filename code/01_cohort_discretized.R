@@ -449,7 +449,8 @@
     group_by(patient_id) %>%
     arrange(start_dttm) %>% 
     mutate(end_dttm = lead(start_dttm)) %>%
-    filter(start_dttm <= t_0 + hours(24) & end_dttm >= t_0) %>%
+    filter(start_dttm <= t_0 + hours(24),
+           is.na(end_dttm) | end_dttm >= t_0) %>%
     ungroup() %>%
     select(patient_id, start_dttm, end_dttm, code_status_category, code_status_name)
   

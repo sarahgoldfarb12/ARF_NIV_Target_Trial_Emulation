@@ -29,6 +29,7 @@
       }
     }
     
+    
     sapply(packages, install_if_missing)
     rm(packages, install_if_missing)
   
@@ -56,6 +57,10 @@
     # Study start and end
     STUDY_START <- as.POSIXct(global_config$study_start, tz=site_time_zone) # Start time
     STUDY_END <- as.POSIXct(global_config$study_end, tz=site_time_zone) # End time
+    
+    # COVID start and end
+    COVID_START <- as.POSIXct(global_config$covid_start, tz=site_time_zone) # Start time
+    COVID_END <- as.POSIXct(global_config$covid_end, tz=site_time_zone) # End time
     
     # Device names that are included as NIV
     NIV_NAMES <- global_config$niv_devices 
