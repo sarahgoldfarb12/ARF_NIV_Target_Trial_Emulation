@@ -1,4 +1,4 @@
-﻿variable_name,lower_limit,upper_limit
+variable_name,lower_limit,upper_limit
 fio2_set,0.21,1
 bilirubin_total,0,80
 creatinine,0,20
@@ -17,3 +17,4 @@ map,30,250
 spo2,50,100
 gcs_total,0,15
 age_at_admission,18,120
+temperature,32,44

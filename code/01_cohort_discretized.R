@@ -469,7 +469,31 @@
     group_by(hospital_block_id) %>% 
     arrange(time_block) %>% 
     tidyr::fill(code_status_category, .direction = "down") %>% 
+    select(-start_dttm, -end_dttm) %>%
     ungroup() 
+  
+  #Temperature
+  vary_chars <- vary_chars %>% 
+    select(-start_dttm, -end_dttm) %>% 
+    left_join(clif_vitals %>% 
+                select(hospitalization_id,
+                       recorded_dttm, 
+                       vital_category,
+                       vital_value) %>%
+                filter(vital_category == "temp_c",
+                       vital_value >= 32 & vital_value <= 44) %>%
+                collect(),
+              by = "hospitalization_id",
+              relationship = "many-to-many") %>%
+    group_by(patient_id) %>% 
+    filter(recorded_dttm >= block_start & recorded_dttm <= block_end) %>% 
+    summarise(avg_temp = mean(vital_value, na.rm = T)) %>% 
+    
+    
+    
+    
+    
+  
   
   # TODO later
   # varying_chars <- c("unit_location", # adt
