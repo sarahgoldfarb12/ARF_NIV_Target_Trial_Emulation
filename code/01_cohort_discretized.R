@@ -1,4 +1,4 @@
-# Sarah Goldfarb
+# Sarah Goldfarb & Lizi Shao
 # 02/04/2026
 
 { # -------  Setup
@@ -249,6 +249,17 @@
       compute()
     cat("---hospital_diagnosis complete!\n")
     
+    cat("---Respiratory device starting...\n")
+    clif_respiratory_support <- clif_respiratory_support |>
+      inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+      compute()
+    cat("---Respiratory device complete!\n")
+    
+    cat("---Patient assessment starting...\n")
+    clif_patient_assessments <- clif_patient_assessments |>
+      inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+      compute()
+    cat("---Patient assessment complete!\n")
     
   } # -----------------  End subsetting CLIF tables
   
@@ -390,7 +401,7 @@
     ) |>
     select(hospital_block_id, elixhauser_index, elixhauser_count)
   
-  #Baseline conditions
+  ##Adding elixhauser index and count back into Baseline conditions
   baseline_chars <- baseline_chars %>% 
     left_join(elixhauser_flags %>% 
                 select(hospital_block_id,
@@ -412,14 +423,31 @@
   
   ##Create scaffold of 2 hour time blocks
   vary_chars <- baseline_chars %>% 
-    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
-    crossing(time_block = as.integer(seq(-2,22,by = 2))) %>% #Keep t-2 to t0 block to make carrying forward easier. NOTE: Do NOT include this block in analysis.  
+    select(patient_id, hospital_block_id, t_0) %>%
+    crossing(time_block = as.integer(seq(-2,22,by = 2))) %>% #Keep t-2 to t0 block to make carrying forward easier. 
     mutate(block_start = t_0 + hours(time_block),
-           block_end = t_0 + hours(time_block + 2)) %>% 
-    select(-t_0) 
-
+           block_end = t_0 + hours(time_block + 2)) 
   
-  #Location of the patient
+  ##Create a time-aware link table that connects patient_id and the hospitalization_ids (occurring <= 24 hours after t_0)
+  ##NOTE: optional table, since we have already linked patient id to the clif tables
+  hospital_block_key_obj_24hours <- final_cohort %>% 
+    select(patient_id, hospital_block_id, t_0) %>% 
+    #All hospitalizations of the patients in final cohort
+    inner_join(hospital_block_key_obj %>% select(patient_id, hospital_block_id, hospitalization_id) %>% collect(),
+               by = c("patient_id", "hospital_block_id")) %>% 
+    #Filter hospitalizations that occur within t_0 - 2 hours -- t_0 + 24 hours
+    mutate(window_24hour_start = t_0 - hours(2),
+           window_24hour_end = t_0 + hours(24)) %>% 
+    left_join(clif_hospitalization %>% 
+                select(hospitalization_id, admission_dttm, discharge_dttm) %>% 
+                collect(), 
+              by = "hospitalization_id") %>% 
+    filter(admission_dttm <= window_24hour_end,
+           is.na(discharge_dttm) | discharge_dttm >= window_24hour_start)
+  
+  # ----- Transforming variables into varying characteristics table
+  
+  ##Location of the patient
   location <- vary_chars %>% 
     select(hospital_block_id,
            time_block, 
@@ -429,31 +457,34 @@
                 collect() %>% 
                 distinct(), 
               by = "hospital_block_id",
-              relationship = "many-to-many") %>% 
+              relationship = "many-to-many") %>% #Each unique patient has >1 rows, each corresponding to a time block -> specify many-to-many 
     group_by(hospital_block_id, time_block) %>% 
-    filter(in_dttm <= block_end, #Find the time of the location corresponding to the end of the given 2-hour block. 
+    filter(in_dttm <= block_end, #Find the time of the location corresponding to the end of each 2-hour block. 
            is.na(out_dttm) | out_dttm > block_end) %>% 
     arrange(desc(in_dttm), .by_group = TRUE) %>%
-    slice(1) %>%
+    slice(1) %>% #In case of duplicates
     ungroup() %>% 
     rename(unit_location = location_category)
   
-  vary_chars <- vary_chars %>% #Add back dropped rows and apply imputation (carry forward)
+  vary_chars <- vary_chars %>% #the join Adds back dropped rows and apply imputation (carry forward) in the parent table 
     left_join(location %>% select(hospital_block_id, time_block, unit_location), by = c("hospital_block_id", "time_block")) %>% 
     group_by(hospital_block_id) %>% 
     arrange(time_block, .by_group = TRUE) %>% 
     tidyr::fill(unit_location, .direction = "down") %>% 
     ungroup() 
   
-  #Code status
-  code_status <- clif_code_status %>% 
-    collect() %>%
-    distinct() %>% 
-    inner_join(baseline_chars %>% select(patient_id, t_0),
-              by = "patient_id") %>%
+  
+  ##Code status
+  code_status <- vary_chars %>% 
+    select(patient_id, t_0) %>% 
+    left_join(clif_code_status %>% 
+                    collect() %>%
+                    distinct(),
+              by = "patient_id", 
+              relationship = "many-to-many") %>%
     group_by(patient_id) %>%
     arrange(start_dttm) %>% 
-    mutate(end_dttm = lead(start_dttm)) %>%
+    mutate(end_dttm = lead(start_dttm)) %>% #Need end_dttm (see above) -> set start_dttm of the next code status as end_dttm of current
     filter(start_dttm <= t_0 + hours(24),
            is.na(end_dttm) | end_dttm >= t_0) %>%
     ungroup() %>%
@@ -479,7 +510,8 @@
     select(-start_dttm, -end_dttm) %>%
     ungroup() 
   
-  #Temperature
+  
+  ##Temperature
   avg_temp <- vary_chars %>% 
     left_join(clif_vitals %>% 
                 select(patient_id,
@@ -494,24 +526,23 @@
               relationship = "many-to-many") %>%
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
-    filter(recorded_dttm >= block_start & recorded_dttm < block_end) %>% 
-    summarise(avg_temp = mean(vital_value, na.rm = T),
+    filter(recorded_dttm >= block_start & recorded_dttm < block_end) %>% #Rule change: find the average of all values in the given time block.
+    summarise(temp = mean(vital_value, na.rm = T),
               .groups = "drop") 
   
   vary_chars <- vary_chars %>% 
     left_join(avg_temp, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
-    tidyr::fill(avg_temp, .direction = "down") %>%
+    tidyr::fill(temp, .direction = "down") %>%
     ungroup()
   
-  #MAP
+  
+  ##MAP
   avg_map <- vary_chars %>% 
     left_join(clif_vitals %>% 
                 select(patient_id,
@@ -526,9 +557,8 @@
               relationship = "many-to-many") %>%
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
-    filter(recorded_dttm >= block_start & recorded_dttm < block_end) %>% 
+    filter(recorded_dttm >= block_start & recorded_dttm < block_end) %>% #find the average of all values in the given time block.
     summarise(avg_map = mean(vital_value, na.rm = T),
               .groups = "drop") 
   
@@ -536,26 +566,25 @@
     left_join(avg_map, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
     tidyr::fill(avg_map, .direction = "down") %>%
     ungroup()
   
-  #resp device
+  
+  ##resp device
   resp_support <- vary_chars %>% 
     left_join(clif_respiratory_support %>% 
-                select(hospitalization_id,
+                select(patient_id,
                        recorded_dttm, 
                        device_category) %>%
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(recorded_dttm >= block_start & recorded_dttm < block_end) %>% 
     arrange(desc(recorded_dttm), .by_group = TRUE) %>% #Find the time of the location corresponding to the end of the given 2-hour block.
@@ -563,7 +592,6 @@
     ungroup() %>% 
     select(patient_id, 
            hospital_block_id,
-           hospitalization_id,
            time_block,
            device_category)
   
@@ -571,14 +599,14 @@
     left_join(resp_support, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
     tidyr::fill(device_category, .direction = "down") %>%
     ungroup()
   
-  #heart rate
+  
+  ##heart rate
   avg_hr <- vary_chars %>% 
     left_join(clif_vitals %>% 
                 select(patient_id,
@@ -593,7 +621,6 @@
               relationship = "many-to-many") %>%
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(recorded_dttm >= block_start & recorded_dttm < block_end) %>% 
     summarise(avg_hr = mean(vital_value, na.rm = TRUE),
@@ -603,7 +630,6 @@
     left_join(avg_hr, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
@@ -617,11 +643,11 @@
   
   sodium <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 filter(lab_category == "sodium") %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       sodium = if_else(
@@ -632,7 +658,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            sodium >= SODIUM_MIN & sodium <= SODIUM_MAX) %>% 
@@ -643,7 +668,6 @@
     left_join(sodium, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
@@ -651,17 +675,17 @@
     ungroup() 
   
   
-  #potassium
+  ##potassium
   POTASSIUM_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "potassium"]
   POTASSIUM_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "potassium"]
   
   potassium <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 filter(lab_category == "potassium") %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       potassium = if_else(
@@ -672,7 +696,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            potassium >= POTASSIUM_MIN & potassium <= POTASSIUM_MAX) %>% 
@@ -683,25 +706,23 @@
     left_join(potassium, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
     tidyr::fill(avg_potassium, .direction = "down") %>%
     ungroup() 
   
-  
-  #WBC
+  ##WBC
   WBC_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "wbc"]
   WBC_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "wbc"]
   
   wbc <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 filter(lab_category == "wbc") %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       wbc = if_else(
@@ -712,7 +733,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            wbc >= WBC_MIN & wbc <= WBC_MAX) %>% 
@@ -723,7 +743,6 @@
     left_join(wbc, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
@@ -731,17 +750,17 @@
     ungroup()
   
   
-  #Bicarb
+  ##Bicarb
   BICARB_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "bicarb"]
   BICARB_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "bicarb"]
   
   bicarb <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 filter(lab_category == "bicarbonate") %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       bicarb = if_else(
@@ -752,7 +771,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            bicarb >= BICARB_MIN & bicarb <= BICARB_MAX) %>% 
@@ -763,7 +781,6 @@
     left_join(bicarb, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
@@ -776,11 +793,11 @@
   
   lactate <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 filter(lab_category == "lactate") %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       lactate = if_else(
@@ -791,7 +808,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            lactate >= LACTATE_MIN & lactate <= LACTATE_MAX) %>% 
@@ -802,26 +818,24 @@
     left_join(lactate, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
     tidyr::fill(avg_lactate, .direction = "down") %>%
     ungroup()
   
-  #pco2 arterial or venous
   
-  #Sofa_brain
+  ##Sofa_brain
   GCS_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "gcs_total"]
   GCS_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "gcs_total"]
   
   gcs_total <- vary_chars %>% 
     left_join(clif_patient_assessments %>% 
-                select(hospitalization_id, recorded_dttm, assessment_category, numerical_value) %>%
+                select(patient_id, recorded_dttm, assessment_category, numerical_value) %>%
                 filter(assessment_category == "gcs_total") %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       gcs_total = if_else(
@@ -832,7 +846,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(recorded_dttm >= block_start & recorded_dttm < block_end,
            gcs_total >= GCS_MIN & gcs_total <= GCS_MAX) %>% 
@@ -843,18 +856,17 @@
     left_join(gcs_total, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
     tidyr::fill(avg_gcs, .direction = "down") %>%
     mutate(
       sofa_brain = case_when(
-        is.na(avg_gcs) ~ NA_character_,
+        is.na(avg_gcs) ~ NA_character_, #categorize all sofa scores
         avg_gcs >= 15 ~ "0",
-        avg_gcs >= 13 & avg_gcs <= 14 ~ "1",
-        avg_gcs >= 10 & avg_gcs <= 12 ~ "2",
-        avg_gcs >= 6 & avg_gcs <= 9 ~ "3",
+        avg_gcs >= 13 & avg_gcs < 15 ~ "1",
+        avg_gcs >= 10 & avg_gcs < 13 ~ "2",
+        avg_gcs >= 6  & avg_gcs < 10 ~ "3",
         avg_gcs < 6 ~ "4"
       ),
       sofa_brain = if_else(
@@ -872,11 +884,11 @@
   
   bilirubin_total <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 filter(lab_category == "bilirubin_total") %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       bilirubin_total = if_else(
@@ -887,7 +899,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            bilirubin_total >= BILIRUBIN_MIN & bilirubin_total <= BILIRUBIN_MAX) %>% 
@@ -898,7 +909,6 @@
     left_join(bilirubin_total, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
@@ -927,11 +937,11 @@
   
   platelet_count <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 filter(lab_category == "platelet_count") %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       platelet_count = if_else(
@@ -942,7 +952,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            platelet_count >= PLATELET_MIN & platelet_count <= PLATELET_MAX) %>% 
@@ -953,7 +962,6 @@
     left_join(platelet_count, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
@@ -982,11 +990,11 @@
   
   creatinine <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 filter(lab_category == "creatinine") %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       creatinine = if_else(
@@ -997,7 +1005,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            creatinine >= CREATININE_MIN & creatinine <= CREATININE_MAX) %>% 
@@ -1008,7 +1015,6 @@
     left_join(creatinine, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
@@ -1037,11 +1043,11 @@
   
   pco2 <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 filter(lab_category %in% c("pco2_arterial", "pco2_venous")) %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       pco2 = if_else(
@@ -1052,7 +1058,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            pco2 >= PCO2_MIN & pco2 <= PCO2_MAX) %>% 
@@ -1063,7 +1068,6 @@
     left_join(pco2, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
@@ -1076,11 +1080,11 @@
   
   ph <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 filter(lab_category %in% c("ph_arterial", "ph_venous")) %>% 
                 collect() %>% 
                 distinct(),
-              by = "hospitalization_id",
+              by = "patient_id",
               relationship = "many-to-many") %>%
     mutate(
       ph = if_else(
@@ -1091,7 +1095,6 @@
     ) %>% 
     group_by(patient_id, 
              hospital_block_id, 
-             hospitalization_id, 
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            ph >= PH_MIN & ph <= PH_MAX) %>% 
@@ -1102,7 +1105,6 @@
     left_join(ph, 
               by = c("patient_id",
                      "hospital_block_id",
-                     "hospitalization_id",
                      "time_block")) %>%
     group_by(hospital_block_id) %>%
     arrange(time_block, .by_group = TRUE) %>%
@@ -1126,32 +1128,28 @@
   
   #All respiratory support entries of the cohort
   SF1 <- clif_respiratory_support %>%
-    collect() %>% 
+    select(patient_id, recorded_dttm, fio2_set) %>%
     distinct() %>%
-    inner_join(hospital_block_key_obj %>% 
-                 collect(),
-               by = "hospitalization_id") %>% 
-    select(hospitalization_id, recorded_dttm, fio2_set) %>%
     collect() 
   
-  #Intermediate DF2: extract fio2 values, match them to time blocks, and impute
+  #Intermediate DF2: extract fio2 values, match them to time blocks, and impute withiin the same device period
   SF2 <- vary_chars %>%
-    left_join(baseline_chars %>% select(hospital_block_id, t_0), #Require t_0 for edge cases
-              by = "hospital_block_id") %>% 
-    select(hospitalization_id, device_category, t_0, time_block, block_start, block_end) %>% 
+    select(patient_id, device_category, t_0, time_block, block_start, block_end) %>% 
     #Interval join to filter recorded fio2 values per each time block per patient. 
     left_join(SF1, 
-              by = join_by(hospitalization_id, 
+              by = join_by(patient_id, 
                            block_start <= recorded_dttm, 
                            block_end > recorded_dttm)) %>% 
     #Create a cumsum column for changes in the resp. device that the patient uses in the style of hospitalization block
-    group_by(hospitalization_id) %>% 
+    group_by(patient_id) %>% 
     arrange(block_start, recorded_dttm) %>% 
     mutate(
       device_category_clean = coalesce(device_category, "UNKNOWN"), #All NA values for device_category will be treated as "UNKNOWN"
       new_device_period = case_when(
-        row_number() == 1 ~ TRUE, #Initiate the cumsum with the first record: set as T
-        device_category_clean != lag(device_category_clean) ~ TRUE, #If they have multiple records, compare current record with the following one, set new device as T (include: NA -> device or vice versa)
+        #Initiate first record as T
+        row_number() == 1 ~ TRUE, 
+        #If they have multiple records, compare current record with the previous one, set new device as T (include: NA -> device but not vice versa)
+        device_category_clean != lag(device_category_clean) & (device_category_clean != "UNKNOWN") ~ TRUE, 
         TRUE ~ FALSE
       ),
       device_period = cumsum(new_device_period) #a counter variable tracking the cum. sum of total devices used by the patient
@@ -1159,21 +1157,21 @@
     ungroup() %>% 
     select(-device_category_clean, -new_device_period) %>% 
     #Impute within the device period forewards and then backwards
-    group_by(hospitalization_id, device_period) %>% 
+    group_by(patient_id, device_period) %>% 
     arrange(recorded_dttm, .by_group = T) %>% 
     tidyr::fill(fio2_set, .direction = "down") %>%
     tidyr::fill(fio2_set, .direction = "up") %>% 
     ungroup() 
   
-  #Intermediate DF3: handle edge cases: if there are multiple devices within a time block, the rule is to select the last device at the end of the block. However, there may be 
-  #multiple devices within a time block after joining the unprocessed device records. We will limit fio2 records within any given block to those from the last device at the end 
+  #Intermediate DF3: handle edge cases: Although SF ratio for a given time block is calculated as the average of individual SF ratios, there is one and
+  #only one device per time block. Therefore, We will limit fio2 records within any given block to those from the last device at the end 
   #of the block. 
   SF3 <- SF2 %>% 
     rename(device_category_transformed = device_category) %>%
-    left_join(clif_respiratory_support %>% select(hospitalization_id, recorded_dttm, device_category_og = device_category) %>% collect() %>% distinct(), 
-                            by = c("hospitalization_id", "recorded_dttm"), 
+    left_join(clif_respiratory_support %>% select(patient_id, recorded_dttm, device_category_og = device_category) %>% collect() %>% distinct(), 
+                            by = c("patient_id", "recorded_dttm"), 
                             relationship = "many-to-many") %>% 
-    filter(is.na(device_category_og) | is.na(device_category_transformed) | device_category_og == device_category_transformed) 
+    filter((is.na(device_category_og) & is.na(device_category_transformed)) | device_category_og == device_category_transformed) 
     
   #Intermediate DF4: create a time block for fio2 so that it can be matched to spo2 and filter only permissible values of fio2
   SF4 <- SF3 %>% 
@@ -1182,20 +1180,20 @@
            fio2_time_start = recorded_dttm) %>% 
     filter(!is.na(fio2_time_start),
            FIO2_MIN <= fio2_set & FIO2_MAX >= fio2_set) %>% 
-    group_by(hospitalization_id) %>% 
+    group_by(patient_id) %>% 
     arrange(fio2_time_start) %>% 
     #If it is the last fio2 for the given hospitalization id within the 24 hour block, set the end of the fio2 block as 24 hours after t_0. 
     mutate(fio2_time_end = lead(fio2_time_start),
            fio2_time_end = if_else(row_number() == n(), t_0 + hours(24), fio2_time_end)) %>% 
     ungroup() %>% 
     left_join(clif_vitals %>% 
-                select(hospitalization_id, recorded_dttm, vital_category, vital_value) %>%
+                select(patient_id, recorded_dttm, vital_category, vital_value) %>%
                 filter(vital_category == "spo2",
                        vital_value >= SPO2_MIN, 
                        vital_value <= SPO2_MAX) %>% 
                 collect() %>% 
                 distinct(), 
-              by = join_by(hospitalization_id, 
+              by = join_by(patient_id, 
                            fio2_time_start <= recorded_dttm,
                            fio2_time_end > recorded_dttm),
               relationship = "many-to-many") 
@@ -1204,29 +1202,29 @@
   #of hosp. id, device category, device period, and time block. 
   SF5 <- SF4 %>% 
     mutate(sf = vital_value / fio2_set) %>% 
-    group_by(hospitalization_id, device_category, device_period, time_block) %>% 
+    group_by(patient_id, device_category, device_period, time_block) %>% 
     summarise(avg_sf = mean(sf, na.rm = TRUE)) %>% 
     ungroup() %>% 
     #Check to avoid having multiple devices per time_block -> select the device closest to end of the time block
-    group_by(hospitalization_id, time_block) %>% 
+    group_by(patient_id, time_block) %>% 
     slice_max(order_by = device_period, n = 1, with_ties = FALSE) %>% 
     ungroup() 
   
-  #Joining back with vary_chars
+  #Joining back with vary_chars, create a device block for sf values from the same device, and impute within the block. 
   vary_chars_SF5 <- vary_chars %>% 
     left_join(SF5 %>% 
                 select(-device_category) %>% 
                 collect() %>% 
                 distinct(), 
-              by = c("hospitalization_id", "time_block")) %>% 
-    group_by(patient_id, hospitalization_id) %>% 
+              by = c("patient_id", "time_block")) %>% 
+    group_by(patient_id) %>% 
     arrange(time_block, .by_group = TRUE) %>% 
     mutate(device_period_new = 1 + cumsum(row_number() != 1 &
                                             !is.na(device_category) &
                                             (is.na(lag(device_category)) |
                                                device_category != lag(device_category)))) %>% 
     ungroup() %>% 
-    group_by(patient_id, hospitalization_id, device_period_new) %>% 
+    group_by(patient_id, device_period_new) %>% 
     tidyr::fill(avg_sf, .direction = "down") %>%
     ungroup() %>% 
     select(-device_period)
@@ -1241,32 +1239,27 @@
 
   #All respiratory support entries of the cohort
   PF1 <- clif_respiratory_support %>%
-    collect() %>% 
+    select(patient_id, recorded_dttm, fio2_set) %>%
     distinct() %>%
-    inner_join(hospital_block_key_obj %>% 
-                 collect(),
-               by = "hospitalization_id") %>% 
-    select(hospitalization_id, recorded_dttm, fio2_set) %>%
     collect() 
   
-  #Intermediate DF2: extract fio2 values, match them to time blocks, and impute
+  #Intermediate DF2: extract fio2 values, match them to time blocks, and impute withiin the same device period
   PF2 <- vary_chars %>%
-    left_join(baseline_chars %>% select(hospital_block_id, t_0), #Require t_0 for edge cases
-              by = "hospital_block_id") %>% 
-    select(hospitalization_id, device_category, t_0, time_block, block_start, block_end) %>% 
+    select(patient_id, device_category, t_0, time_block, block_start, block_end) %>% 
     #Interval join to filter recorded fio2 values per each time block per patient. 
     left_join(PF1, 
-              by = join_by(hospitalization_id, 
+              by = join_by(patient_id, 
                            block_start <= recorded_dttm, 
                            block_end > recorded_dttm)) %>% 
     #Create a cumsum column for changes in the resp. device that the patient uses in the style of hospitalization block
-    group_by(hospitalization_id) %>% 
+    group_by(patient_id) %>% 
     arrange(block_start, recorded_dttm) %>% 
     mutate(
       device_category_clean = coalesce(device_category, "UNKNOWN"), #All NA values for device_category will be treated as "UNKNOWN"
       new_device_period = case_when(
         row_number() == 1 ~ TRUE, #Initiate the cumsum with the first record: set as T
-        device_category_clean != lag(device_category_clean) ~ TRUE, #If they have multiple records, compare current record with the following one, set new device as T (include: NA -> device or vice versa)
+        #If they have multiple records, compare current record with the previous one, set new device as T (include: NA -> device but not vice versa)
+        device_category_clean != lag(device_category_clean) & (device_category_clean != "UNKNOWN") ~ TRUE, 
         TRUE ~ FALSE
       ),
       device_period = cumsum(new_device_period) #a counter variable tracking the cum. sum of total devices used by the patient
@@ -1274,21 +1267,22 @@
     ungroup() %>% 
     select(-device_category_clean, -new_device_period) %>% 
     #Impute within the device period forewards and then backwards
-    group_by(hospitalization_id, device_period) %>% 
+    group_by(patient_id, device_period) %>% 
     arrange(recorded_dttm, .by_group = T) %>% 
     tidyr::fill(fio2_set, .direction = "down") %>%
     tidyr::fill(fio2_set, .direction = "up") %>% 
     ungroup() 
   
-  #Intermediate DF3: handle edge cases: if there are multiple devices within a time block, the rule is to select the last device at the end of the block. However, there may be 
-  #multiple devices within a time block after joining the unprocessed device records. We will limit fio2 records within any given block to those from the last device at the end 
+  
+  #Intermediate DF3:handle edge cases: Although SF ratio for a given time block is calculated as the average of individual SF ratios, there is one and
+  #only one device per time block. Therefore, We will limit fio2 records within any given block to those from the last device at the end 
   #of the block. 
   PF3 <- PF2 %>% 
     rename(device_category_transformed = device_category) %>%
-    left_join(clif_respiratory_support %>% select(hospitalization_id, recorded_dttm, device_category_og = device_category) %>% collect() %>% distinct(), 
-              by = c("hospitalization_id", "recorded_dttm"), 
+    left_join(clif_respiratory_support %>% select(patient_id, recorded_dttm, device_category_og = device_category) %>% collect() %>% distinct(), 
+              by = c("patient_id", "recorded_dttm"), 
               relationship = "many-to-many") %>% 
-    filter(is.na(device_category_og) | is.na(device_category_transformed) | device_category_og == device_category_transformed) 
+    filter((is.na(device_category_og) & is.na(device_category_transformed)) | device_category_og == device_category_transformed)  
   
   #Intermediate DF4: create a time block for fio2 so that it can be matched to pao2 and filter only permissible values of fio2
   PF4 <- PF3 %>% 
@@ -1297,21 +1291,21 @@
            fio2_time_start = recorded_dttm) %>% 
     filter(!is.na(fio2_time_start),
            FIO2_MIN <= fio2_set & FIO2_MAX >= fio2_set) %>% 
-    group_by(hospitalization_id) %>% 
+    group_by(patient_id) %>% 
     arrange(fio2_time_start) %>% 
     #If it is the last fio2 for the given hospitalization id within the 24 hour block, set the end of the fio2 block as 24 hours after t_0. 
     mutate(fio2_time_end = lead(fio2_time_start),
            fio2_time_end = if_else(row_number() == n(), t_0 + hours(24), fio2_time_end)) %>% 
     ungroup() %>% 
     left_join(clif_labs %>% 
-                select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 collect() %>%
                 mutate(pao2 = coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value)))) %>% 
                 filter(lab_category == "po2_arterial",
                        pao2 >= PAO2_MIN, 
                        pao2 <= PAO2_MAX) %>% 
                 distinct(), 
-              by = join_by(hospitalization_id, 
+              by = join_by(patient_id, 
                            fio2_time_start <= lab_collect_dttm,
                            fio2_time_end > lab_collect_dttm),
               relationship = "many-to-many") 
@@ -1320,11 +1314,11 @@
   #of hosp. id, device category, device period, and time block. 
   PF5 <- PF4 %>% 
     mutate(pf = pao2 / fio2_set) %>% 
-    group_by(hospitalization_id, device_category, device_period, time_block) %>% 
+    group_by(patient_id, device_category, device_period, time_block) %>% 
     summarise(avg_pf = mean(pf, na.rm = TRUE)) %>% 
     ungroup() %>% 
     #Check to avoid having multiple devices per time_block -> select the device closest to end of the time block
-    group_by(hospitalization_id, time_block) %>% 
+    group_by(patient_id, time_block) %>% 
     slice_max(order_by = device_period, n = 1, with_ties = FALSE) %>% 
     ungroup() 
   
@@ -1334,15 +1328,15 @@
                 select(-device_category) %>% 
                 collect() %>% 
                 distinct(), 
-              by = c("hospitalization_id", "time_block")) %>% 
-    group_by(patient_id, hospitalization_id) %>% 
+              by = c("patient_id", "time_block")) %>% 
+    group_by(patient_id) %>% 
     arrange(time_block, .by_group = TRUE) %>% 
     mutate(device_period_new = 1 + cumsum(row_number() != 1 &
                                             !is.na(device_category) &
                                             (is.na(lag(device_category)) |
                                                device_category != lag(device_category)))) %>% 
     ungroup() %>% 
-    group_by(patient_id, hospitalization_id, device_period_new) %>% 
+    group_by(patient_id, device_period_new) %>% 
     tidyr::fill(avg_pf, .direction = "down") %>%
     ungroup() %>% 
     select(-device_period)
