@@ -18,3 +18,9 @@ spo2,50,100
 gcs_total,0,15
 age_at_admission,18,120
 temperature,32,44
+wbc,0,500
+potassium,0,15
+bicarb,0,50
+lactate,0,30
+hr,0,300
+sodium,90,210
