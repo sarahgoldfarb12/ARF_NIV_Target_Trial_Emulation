@@ -261,6 +261,12 @@
       compute()
     cat("---Patient assessment complete!\n")
     
+    cat("---Continuous medications starting...\n")
+    clif_medication_admin_continuous <- clif_medication_admin_continuous |>
+      inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+      compute()
+    cat("---Continuous medications complete!\n")
+    
   } # -----------------  End subsetting CLIF tables
   
   cat("End Setup!\n")
@@ -268,7 +274,7 @@
 }# -------  End setup
 
 
-{ # -----------------  Defining baseline table
+# -----------------  Defining baseline table
   
   baseline_chars <- final_cohort |>
     select(
@@ -476,7 +482,7 @@
   
   ##Code status
   code_status <- vary_chars %>% 
-    select(patient_id, t_0) %>% 
+    distinct(patient_id, t_0) %>% 
     left_join(clif_code_status %>% 
                     collect() %>%
                     distinct(),
@@ -528,7 +534,7 @@
              hospital_block_id, 
              time_block) %>% 
     filter(recorded_dttm >= block_start & recorded_dttm < block_end) %>% #Rule change: find the average of all values in the given time block.
-    summarise(temp = mean(vital_value, na.rm = T),
+    summarise(temp = if_else(all(is.na(vital_value)), NA_real_, mean(vital_value, na.rm = TRUE)),
               .groups = "drop") 
   
   vary_chars <- vary_chars %>% 
@@ -559,7 +565,7 @@
              hospital_block_id, 
              time_block) %>% 
     filter(recorded_dttm >= block_start & recorded_dttm < block_end) %>% #find the average of all values in the given time block.
-    summarise(avg_map = mean(vital_value, na.rm = T),
+    summarise(avg_map = if_else(all(is.na(vital_value)), NA_real_, mean(vital_value, na.rm = TRUE)),
               .groups = "drop") 
   
   vary_chars <- vary_chars %>% 
@@ -623,7 +629,7 @@
              hospital_block_id, 
              time_block) %>% 
     filter(recorded_dttm >= block_start & recorded_dttm < block_end) %>% 
-    summarise(avg_hr = mean(vital_value, na.rm = TRUE),
+    summarise(avg_hr = if_else(all(is.na(vital_value)), NA_real_, mean(vital_value, na.rm = TRUE)),
               .groups = "drop") 
   
   vary_chars <- vary_chars %>% 
@@ -661,7 +667,7 @@
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            sodium >= SODIUM_MIN & sodium <= SODIUM_MAX) %>% 
-    summarise(avg_sodium = mean(sodium, na.rm = TRUE),
+    summarise(avg_sodium = if_else(all(is.na(sodium)), NA_real_, mean(sodium, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -699,7 +705,7 @@
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            potassium >= POTASSIUM_MIN & potassium <= POTASSIUM_MAX) %>% 
-    summarise(avg_potassium = mean(potassium, na.rm = TRUE),
+    summarise(avg_potassium = if_else(all(is.na(potassium)), NA_real_, mean(potassium, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -736,7 +742,7 @@
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            wbc >= WBC_MIN & wbc <= WBC_MAX) %>% 
-    summarise(avg_wbc = mean(wbc, na.rm = TRUE),
+    summarise(avg_wbc = if_else(all(is.na(wbc)), NA_real_, mean(wbc, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -774,7 +780,7 @@
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            bicarb >= BICARB_MIN & bicarb <= BICARB_MAX) %>% 
-    summarise(avg_bicarb = mean(bicarb, na.rm = TRUE),
+    summarise(avg_bicarb = if_else(all(is.na(bicarb)), NA_real_, mean(bicarb, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -811,7 +817,7 @@
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            lactate >= LACTATE_MIN & lactate <= LACTATE_MAX) %>% 
-    summarise(avg_lactate = mean(lactate, na.rm = TRUE),
+    summarise(avg_lactate = if_else(all(is.na(lactate)), NA_real_, mean(lactate, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -849,7 +855,7 @@
              time_block) %>% 
     filter(recorded_dttm >= block_start & recorded_dttm < block_end,
            gcs_total >= GCS_MIN & gcs_total <= GCS_MAX) %>% 
-    summarise(avg_gcs = mean(gcs_total, na.rm = TRUE),
+    summarise(avg_gcs = if_else(all(is.na(gcs_total)), NA_real_, mean(gcs_total, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -902,7 +908,7 @@
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            bilirubin_total >= BILIRUBIN_MIN & bilirubin_total <= BILIRUBIN_MAX) %>% 
-    summarise(bilirubin_total = mean(bilirubin_total, na.rm = TRUE),
+    summarise(bilirubin_total = if_else(all(is.na(bilirubin_total)), NA_real_, mean(bilirubin_total, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -955,7 +961,7 @@
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            platelet_count >= PLATELET_MIN & platelet_count <= PLATELET_MAX) %>% 
-    summarise(platelet_count = mean(platelet_count, na.rm = TRUE),
+    summarise(platelet_count = if_else(all(is.na(platelet_count)), NA_real_, mean(platelet_count, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -1008,7 +1014,7 @@
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            creatinine >= CREATININE_MIN & creatinine <= CREATININE_MAX) %>% 
-    summarise(avg_creatinine = mean(creatinine, na.rm = TRUE),
+    summarise(avg_creatinine = if_else(all(is.na(creatinine)), NA_real_, mean(creatinine, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -1061,7 +1067,7 @@
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            pco2 >= PCO2_MIN & pco2 <= PCO2_MAX) %>% 
-    summarise(avg_pco2 = mean(pco2, na.rm = TRUE),
+    summarise(avg_pco2 = if_else(all(is.na(pco2)), NA_real_, mean(pco2, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -1098,7 +1104,7 @@
              time_block) %>% 
     filter(lab_collect_dttm >= block_start & lab_collect_dttm < block_end,
            ph >= PH_MIN & ph <= PH_MAX) %>% 
-    summarise(avg_ph = mean(ph, na.rm = TRUE),
+    summarise(avg_ph = if_else(all(is.na(ph)), NA_real_, mean(ph, na.rm = TRUE)),
               .groups = "drop")
   
   vary_chars <- vary_chars %>% 
@@ -1203,7 +1209,7 @@
   SF5 <- SF4 %>% 
     mutate(sf = vital_value / fio2_set) %>% 
     group_by(patient_id, device_category, device_period, time_block) %>% 
-    summarise(avg_sf = mean(sf, na.rm = TRUE)) %>% 
+    summarise(avg_sf = if_else(all(is.na(sf)), NA_real_, mean(sf, na.rm = TRUE))) %>% 
     ungroup() %>% 
     #Check to avoid having multiple devices per time_block -> select the device closest to end of the time block
     group_by(patient_id, time_block) %>% 
@@ -1315,7 +1321,7 @@
   PF5 <- PF4 %>% 
     mutate(pf = pao2 / fio2_set) %>% 
     group_by(patient_id, device_category, device_period, time_block) %>% 
-    summarise(avg_pf = mean(pf, na.rm = TRUE)) %>% 
+    summarise(avg_pf = if_else(all(is.na(pf)), NA_real_, mean(pf, na.rm = TRUE))) %>% 
     ungroup() %>% 
     #Check to avoid having multiple devices per time_block -> select the device closest to end of the time block
     group_by(patient_id, time_block) %>% 
@@ -1344,12 +1350,81 @@
   #Final DF without auxiliary variables
   vary_chars <- vary_chars_check_PF %>% 
     select(-device_period_new)
-  
 
   
-} # -----------------  End defining baseline table and varying characteristics 
+  ##Anti hypertensive drip dose
+  antihypertensive_drip <- vary_chars %>% 
+    left_join(clif_medication_admin_continuous %>% 
+                select(patient_id, 
+                       med_category, 
+                       mar_action_category,
+                       admin_dttm) %>% 
+                filter(med_category %in% c("nicardipine",
+                                        "nitroglycerin",
+                                        "nitroprusside",
+                                        "labetalol",
+                                        "esmolol"),
+                       mar_action_category %in% c("New Bag", 
+                                                  "Rate Change", 
+                                                  "Restarted", 
+                                                  "Rate Verify")) %>% 
+                collect() %>% 
+                distinct(), 
+              by = join_by(patient_id, 
+                           block_start <= admin_dttm, 
+                           block_end >= admin_dttm),
+              relationship = "many-to-many") %>% 
+    group_by(patient_id, block_start) %>% 
+    summarise(
+      antihypertensive_drip = any(!is.na(med_category))
+      ) %>% 
+    ungroup() 
+  
+  vary_chars <- vary_chars %>%
+    left_join(antihypertensive_drip, by = c("patient_id", "block_start")) %>%
+    mutate(antihypertensive_drip = coalesce(antihypertensive_drip, FALSE))
+  
+  
+  ##Naloxone
+  naloxone <- vary_chars %>% 
+    left_join(clif_medication_admin_continuous %>% 
+                select(patient_id, 
+                       med_category, 
+                       mar_action_category,
+                       admin_dttm) %>% 
+                filter(med_category %in% c("naloxone"),
+                       mar_action_category %in% c("New Bag", 
+                                                  "Rate Change", 
+                                                  "Restarted", 
+                                                  "Rate Verify")) %>% 
+                collect() %>% 
+                distinct(), 
+              by = join_by(patient_id, 
+                           block_start <= admin_dttm, 
+                           block_end >= admin_dttm),
+              relationship = "many-to-many") %>% 
+    group_by(patient_id, block_start) %>% 
+    summarise(
+      naloxone = any(!is.na(med_category))
+    ) %>% 
+    ungroup() 
+  
+  vary_chars <- vary_chars %>%
+    left_join(naloxone, by = c("patient_id", "block_start")) %>%
+    mutate(naloxone = coalesce(naloxone, FALSE))
+  
+# -----------------  End defining baseline table and varying characteristics 
+  
+  
+  
+# -----------------  Defining outcomes table
 
 
+
+  
+  
+  
+# -----------------  End defining outcomes table
 
 
 
