@@ -460,6 +460,7 @@
            block_end) %>%
     left_join(clif_adt %>% 
                 select(hospital_block_id, hospital_id, in_dttm, out_dttm, location_category) %>% 
+                filter(!location_category %in% c("procedural", "radiology", "dialysis", "other")) %>% 
                 collect() %>% 
                 distinct(), 
               by = "hospital_block_id",
@@ -1425,6 +1426,18 @@
   
   
 # -----------------  End defining outcomes table
+
+  
+  
+# -----------------  Start exporting data
+  
+  #Save baseline characteristics
+  write_csv(baseline_chars, paste0(project_location, "/private_tables/baseline_chars.csv"))
+  
+  #Save varying characteristics
+  write_csv(vary_chars, paste0(project_location, "/private_tables/vary_chars.csv"))
+  
+# -----------------  End exporting data
 
 
 

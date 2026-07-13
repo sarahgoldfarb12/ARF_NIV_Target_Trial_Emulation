@@ -22,10 +22,10 @@ check_vary <- function(
 }
 
 exclude_cols <- names(vary_chars)[7:length(names(vary_chars))]
-exclude_cols <- setdiff(exclude_cols, "device_category")
+exclude_cols <- setdiff(exclude_cols, c("device_category", "avg_pf", "avg_sf"))
 exclude_cols <- c(exclude_cols, "t_0", "hospital_block_id")
 
-set.seed(1)
+set.seed(12)
 
 sample_ids <- vary_chars %>%
   distinct(patient_id) %>%
