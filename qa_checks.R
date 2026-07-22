@@ -41,7 +41,7 @@ check_vary(
 )
 
 ###Randomization Indicator
-table(baseline_chars $transition_path, baseline_chars$randomization)
+table(baseline_chars$transition_path, baseline_chars$randomization)
 
 ###Outcome
 ##Primary outcome (hospice and death by 28 days) and first secondary outcome (hospice and death by 60 days)
@@ -70,4 +70,13 @@ outcomes_chars %>%
   count(room_air_days_28, name = "total patients") %>% 
   arrange(desc(`total patients`)) %>% 
   print(n=100)
+
+##Secondary outcome (escalation of care within 7 days)
+qa1 <- outcomes_chars %>% 
+  inner_join(baseline_chars %>% select(patient_id, randomization), 
+             by = "patient_id")
+
+#Escalation logic matches randomization
+table(qa1$randomization, qa1$escalation_status_7d, useNA = "ifany")
+
 
