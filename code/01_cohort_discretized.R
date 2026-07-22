@@ -424,6 +424,7 @@
               by = "hospital_block_id") %>% 
     mutate(elixhauser_index = coalesce(elixhauser_index, 0),
            elixhauser_count = coalesce(elixhauser_count, 0))
+
   
   # -----------------  Defining varying characteristics table
   
@@ -1414,16 +1415,295 @@
     left_join(naloxone, by = c("patient_id", "block_start")) %>%
     mutate(naloxone = coalesce(naloxone, FALSE))
   
+  
+  ###Create a randomization indicator and transition indicator in baseline_chars
+  
+  transition_baseline <- vary_chars %>%
+    filter(time_block >= -2) %>%
+    arrange(patient_id, time_block) %>%
+    group_by(patient_id) %>%
+    filter(unit_location != lag(unit_location) | is.na(lag(unit_location))) %>%
+    summarise(
+      transition_path = paste(unit_location, collapse = " -> "),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      randomization = as.integer(
+        startsWith(transition_path, "ed -> icu") |
+          startsWith(transition_path, "ed -> stepdown")
+      )
+    )
+  
+  baseline_chars <- baseline_chars %>%
+    left_join(transition_baseline, by = "patient_id") %>%
+    mutate(
+      transition_path = coalesce(transition_path, "unknown"),
+      randomization = coalesce(randomization, 0L)
+    )
+  
+
 # -----------------  End defining baseline table and varying characteristics 
   
   
   
 # -----------------  Defining outcomes table
 
-
-
+  outcomes_chars <- vary_chars %>% 
+    select(patient_id, hospital_block_id, t_0) %>% #t_0 is start of follow-up, as defined in SAP. 
+    distinct()
+  
+  ##In-hospital death or hospice discharge by day 28 after start of follow-up
+  #Hospice discharge
+  hospice_discharge <- outcomes_chars %>% 
+    mutate(end_date = t_0 + days(28)) %>% 
+    left_join(clif_adt %>% 
+                select(patient_id, location_category, in_dttm) %>% 
+                filter(location_category == "hospice") %>% 
+                collect(),
+              by = join_by(patient_id, 
+                           t_0 <= in_dttm,
+                           end_date >= in_dttm)) %>% 
+    group_by(patient_id) %>%
+    summarise(
+      hospice_transition = as.integer(any(!is.na(in_dttm))),
+      hospice_discharge_time_by_28d = if (any(!is.na(in_dttm))) {
+        min(in_dttm, na.rm = TRUE)
+      } else {as.POSIXct(NA)},
+      .groups = "drop"
+    )
+  
+  #Mortality
+  mortality <- outcomes_chars %>% 
+    mutate(end_date = t_0 + days(28)) %>% 
+    left_join(
+      clif_hospitalization %>% 
+        rename(patient_id = patient_id.x) %>% 
+        select(patient_id, discharge_dttm, discharge_category) %>% 
+        filter(discharge_category == "Expired") %>% 
+        collect(),
+      by = "patient_id"
+    ) %>%
+    left_join(
+      clif_patient %>%
+        select(patient_id, death_dttm) %>%
+        collect(),
+      by = "patient_id"
+    ) %>%
+    mutate(
+      death_time = case_when(
+        !is.na(death_dttm) & !is.na(discharge_dttm) ~ 
+          #we count in-hospital death, so death dttm, which is applied to a broader category of deaths, is only used
+          #when death dttm occurs during a hospalization (during which a death event is recorded). 
+          if_else(death_dttm <= discharge_dttm, death_dttm, discharge_dttm), 
+        TRUE ~ discharge_dttm
+      ),
+      death_by_28d = if_else(
+        !is.na(death_time) &
+          death_time >= t_0 &
+          death_time <= end_date, death_time, as.POSIXct(NA)
+      )
+    )
+  
+  #Combine in hospital mortality and hospice, and then join back
+  mortality_hospice <- mortality %>%
+    select(patient_id, death_dttm_by_28d = death_by_28d) %>%
+    left_join(
+      hospice_discharge %>%
+        select(
+          patient_id,
+          hospice_discharge_dttm_by_28d = hospice_discharge_time_by_28d),
+      by = "patient_id"
+    ) %>%
+    mutate(
+      death_or_hospice_by_28d = as.integer(
+        !is.na(death_dttm_by_28d) | !is.na(hospice_discharge_dttm_by_28d)
+      )
+    )
+  
+  outcomes_chars <- outcomes_chars %>% 
+    left_join(mortality_hospice, 
+              by = "patient_id")
   
   
+  ##In hospital mortality or hospice discharge by day 60 after start of follow-up
+  #Hospice discharge
+  hospice_discharge_60 <- outcomes_chars %>% 
+    mutate(end_date = t_0 + days(60)) %>% 
+    left_join(clif_adt %>% 
+                select(patient_id, location_category, in_dttm) %>% 
+                filter(location_category == "hospice") %>% 
+                collect(),
+              by = join_by(patient_id, 
+                           t_0 <= in_dttm,
+                           end_date >= in_dttm)) %>% 
+    group_by(patient_id) %>%
+    summarise(
+      hospice_discharge_time_by_60d = if (any(!is.na(in_dttm))) {
+        min(in_dttm, na.rm = TRUE)
+      } else {
+        as.POSIXct(NA)
+      },
+      .groups = "drop"
+    )
+  
+  #Mortality
+  mortality_60 <- outcomes_chars %>% 
+    mutate(end_date = t_0 + days(60)) %>% 
+    left_join(
+      clif_hospitalization %>% 
+        rename(patient_id = patient_id.x) %>% 
+        select(patient_id, discharge_dttm, discharge_category) %>% 
+        filter(discharge_category == "Expired") %>% 
+        collect(),
+      by = "patient_id"
+    ) %>%
+    left_join(
+      clif_patient %>%
+        select(patient_id, death_dttm) %>%
+        collect(),
+      by = "patient_id"
+    ) %>%
+    mutate(
+      death_time = case_when(
+        !is.na(death_dttm) & !is.na(discharge_dttm) ~ 
+          #we count in-hospital death, so death dttm, which is applied to a broader category of deaths, is only used
+          #when death dttm occurs during a hospalization (during which a death event is recorded). 
+          if_else(death_dttm <= discharge_dttm, death_dttm, discharge_dttm), 
+        TRUE ~ discharge_dttm
+      ),
+      death_by_60d = if_else(
+        !is.na(death_time) &
+          death_time >= t_0 &
+          death_time <= end_date, death_time, as.POSIXct(NA)
+      )
+    )
+  
+  #Combine in hospital mortality and hospice, and then join back
+  mortality_hospice_60 <- mortality_60 %>%
+    select(patient_id, death_dttm_by_60d = death_by_60d) %>%
+    left_join(
+      hospice_discharge_60 %>%
+        select(
+          patient_id,
+          hospice_discharge_dttm_by_60d = hospice_discharge_time_by_60d),
+      by = "patient_id"
+    ) %>%
+    mutate(
+      death_or_hospice_by_60d = as.integer(
+        !is.na(death_dttm_by_60d) | !is.na(hospice_discharge_dttm_by_60d)
+      )
+    )
+  
+  outcomes_chars <- outcomes_chars %>% 
+    left_join(mortality_hospice_60, 
+              by = "patient_id")
+  
+  ##Respiratory  free days by day 28
+  discharge_by_patient <- clif_hospitalization %>%
+    rename(patient_id = patient_id.x) %>%   
+    select(patient_id, discharge_dttm) %>%
+    collect() %>%
+    group_by(patient_id) %>%
+    summarise(
+      discharge_dttm = max(discharge_dttm, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      discharge_dttm = if_else(
+        is.infinite(discharge_dttm),
+        as.POSIXct(NA),
+        discharge_dttm
+      )
+    )
+  
+  room_air_days_28 <- outcomes_chars %>%
+    select(patient_id, t_0) %>%
+    left_join(discharge_by_patient, by = "patient_id") %>%
+    mutate(
+      window_end = pmin(t_0 + days(28), discharge_dttm, na.rm = TRUE)
+    ) %>%
+    left_join(
+      clif_respiratory_support %>%
+        select(patient_id, device_category, recorded_dttm) %>%
+        collect(),
+      by = "patient_id"
+    ) %>%
+    filter(!is.na(recorded_dttm), recorded_dttm <= window_end) %>%
+    arrange(patient_id, recorded_dttm) %>%
+    group_by(patient_id) %>%
+    mutate(
+      next_recorded_dttm = lead(recorded_dttm),
+      interval_start = pmax(recorded_dttm, t_0),
+      interval_end = pmin(coalesce(next_recorded_dttm, window_end), window_end)
+    ) %>%
+    filter(interval_end > interval_start) %>%
+    summarise(
+      room_air_days_28 = sum(
+        as.numeric(difftime(interval_end, interval_start, units = "hours"))[
+          device_category == "Room Air"
+        ],
+        na.rm = TRUE
+      ) / 24,
+      .groups = "drop"
+    )
+  
+  outcomes_chars <- outcomes_chars %>%
+    left_join(room_air_days_28, by = "patient_id") %>%
+    mutate(room_air_days_28 = coalesce(room_air_days_28, 0),
+           room_air_days_28 = if_else(death_or_hospice_by_28d == 1, 0,room_air_days_28),
+           room_air_days_28 = as.integer(round(room_air_days_28)))
+  
+  
+  ##Escalation of care 
+  imv_7d <- outcomes_chars %>%
+    select(patient_id, t_0) %>%
+    mutate(end_date = t_0 + days(7)) %>%
+    left_join(
+      clif_respiratory_support %>%
+        select(patient_id, device_category, recorded_dttm) %>%
+        filter(device_category == "IMV") %>%
+        collect(),
+      by = join_by(
+        patient_id,
+        t_0 <= recorded_dttm,
+        end_date >= recorded_dttm
+      )
+    ) %>%
+    group_by(patient_id) %>%
+    summarise(
+      imv_by_7d = as.integer(any(!is.na(recorded_dttm))),
+      first_imv_dttm_by_7d = if (any(!is.na(recorded_dttm))) {
+        min(recorded_dttm, na.rm = TRUE)
+      } else {
+        as.POSIXct(NA)
+      },
+      .groups = "drop"
+    )
+  
+  outcomes_chars <- outcomes_chars %>%
+    left_join(
+      baseline_chars %>%
+        select(patient_id, randomization),
+      by = "patient_id"
+    ) %>%
+    left_join(
+      imv_7d %>%
+        select(patient_id, imv_by_7d),
+      by = "patient_id"
+    ) %>%
+    mutate(
+      escalation_status_7d = case_when(
+        coalesce(randomization, 0L) == 0L ~ "not_randomized",
+        coalesce(imv_by_7d, 0L) == 1L |
+          (
+            !is.na(death_dttm_by_28d) &
+              death_dttm_by_28d >= t_0 &
+              death_dttm_by_28d <= t_0 + days(7)
+          ) ~ "escalated",
+        TRUE ~ "not_escalated"
+      )
+    ) %>%
+    select(-randomization, -imv_by_7d)
   
 # -----------------  End defining outcomes table
 
@@ -1436,6 +1716,10 @@
   
   #Save varying characteristics
   write_csv(vary_chars, paste0(project_location, "/private_tables/vary_chars.csv"))
+  
+  #Save outcome variables
+  write_csv(vary_chars, paste0(project_location, "/private_tables/outcomes_chars.csv"))
+  
   
 # -----------------  End exporting data
 
