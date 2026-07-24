@@ -1417,30 +1417,67 @@
   
   
   ###Create a randomization indicator and transition indicator in baseline_chars
-  
-  transition_baseline <- vary_chars %>%
-    filter(time_block >= -2) %>%
-    arrange(patient_id, time_block) %>%
+  transition_baseline <- baseline_chars %>%
+    select(patient_id, t_0) %>% 
+    mutate(treatment_assignment_window_end = t_0 + hours(24),
+           t_negative2 = t_0 - hours(2)) %>% 
+    left_join(clif_adt %>% 
+                select(patient_id, location_category, in_dttm, out_dttm) %>% 
+                collect(),
+              by = join_by(patient_id, 
+                           t_negative2 <= out_dttm,
+                           treatment_assignment_window_end >= in_dttm)) %>% 
+    arrange(patient_id, in_dttm) %>%
     group_by(patient_id) %>%
-    filter(unit_location != lag(unit_location) | is.na(lag(unit_location))) %>%
+    filter(location_category != lag(location_category) | is.na(lag(location_category))) %>%
     summarise(
-      transition_path = paste(unit_location, collapse = " -> "),
+      treatment_transition_path = paste(location_category, collapse = " -> "),
       .groups = "drop"
     ) %>%
     mutate(
+      treatment_transition_path = coalesce(treatment_transition_path, "unknown"),
       randomization = as.integer(
-        startsWith(transition_path, "ed -> icu") |
-          startsWith(transition_path, "ed -> stepdown")
-      )
-    )
-  
-  baseline_chars <- baseline_chars %>%
-    left_join(transition_baseline, by = "patient_id") %>%
-    mutate(
-      transition_path = coalesce(transition_path, "unknown"),
+        startsWith(treatment_transition_path, "ed -> icu") |
+          startsWith(treatment_transition_path, "ed -> stepdown")
+      ),
       randomization = coalesce(randomization, 0L)
     )
   
+  
+  ##Create a treatment assignment time (first time patient transitions from ed to ICU or stepdown)
+  trt_assignment_time <- baseline_chars %>% 
+    select(patient_id, t_0) %>% 
+    left_join(transition_baseline %>% 
+                select(patient_id, randomization), 
+              by = "patient_id") %>% 
+    filter(randomization == 1) %>% 
+    mutate(treatment_assignment_window_end = t_0 + hours(24),
+           t_negative2 = t_0 - hours(2)) %>% 
+    left_join(clif_adt %>% 
+                select(patient_id, location_category, in_dttm, out_dttm) %>% 
+                collect(),
+              by = join_by(patient_id, 
+                           t_negative2 <= out_dttm,
+                           treatment_assignment_window_end >= in_dttm)) %>% 
+    filter(location_category %in% c("icu", "stepdown")) %>%
+    group_by(patient_id) %>%
+    summarise(treatment_assignment_time = min(in_dttm, na.rm = TRUE),
+              treatment_assignment = location_category[which.min(in_dttm)],
+              .groups = "drop")
+  
+  #Join back useful cols from above
+  baseline_chars <- baseline_chars %>% 
+    left_join(trt_assignment_time,
+              by = "patient_id") %>% 
+    left_join(transition_baseline,
+              by = "patient_id") %>% 
+    select(
+      patient_id:elixhauser_count,
+      randomization,
+      treatment_assignment,
+      treatment_assignment_time,
+      treatment_transition_path
+    )
 
 # -----------------  End defining baseline table and varying characteristics 
   
