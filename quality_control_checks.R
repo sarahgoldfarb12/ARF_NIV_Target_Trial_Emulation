@@ -72,9 +72,7 @@ check_vary(data = clif_adt %>% select(patient_id, in_dttm, location_category) %>
                                       exclude_cols = NULL, 
                                       group = c("patient_id")) %>% View()
 
-check_vary(data = trt_assignment_time %>% 
-             left_join(transition_baseline,
-                       by = "patient_id"),
+check_vary(data = baseline_chars,
            ids = sample_ids,
            print_n = 100,
            exclude_cols = NULL,
@@ -109,7 +107,7 @@ outcomes_chars %>%
 
 ##Secondary outcome (resp. free days by day 28)
 outcomes_chars %>% 
-  count(room_air_days_28, name = "total patients") %>% 
+  count(resp_support_free_days_28 , name = "total patients") %>% 
   arrange(desc(`total patients`)) %>% 
   print(n=100)
 

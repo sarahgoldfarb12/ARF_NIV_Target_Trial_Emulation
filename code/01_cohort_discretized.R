@@ -239,7 +239,7 @@
     
     cat("---hospitalization starting...\n")
     clif_hospitalization <- clif_hospitalization |>
-      inner_join(hospital_block_key_obj, by = c("hospitalization_id")) |>
+      inner_join(hospital_block_key_obj, by = c("patient_id", "hospitalization_id")) |>
       compute()
     cat("---hospitalization complete!\n")
     
@@ -288,11 +288,13 @@
     #age at admission at the time of the visit
     left_join(hospital_block_key_obj %>% 
                 select(-hospital_block_id) %>% 
-                collect(),
+                collect() %>% 
+                distinct(),
               by = "patient_id") %>% 
     left_join(clif_hospitalization %>% 
                 select(hospitalization_id, admission_dttm, age_at_admission) %>% 
-                collect(), 
+                collect() %>% 
+                distinct(), 
               by = "hospitalization_id") %>%
     group_by(patient_id) %>%
     arrange(admission_dttm) %>% 
@@ -303,9 +305,10 @@
     
     #albumin value by t=0 (operationalized by collect_dttm. NOTE: Check with Chad collect_dttm OR result_dttm?)
     left_join(clif_labs %>% 
+                collect() %>% 
+                distinct() %>%
                 select(hospitalization_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>% 
-                filter(lab_category == "albumin") %>% 
-                collect(),
+                filter(str_to_lower(trimws(lab_category)) == "albumin"),
               by = "hospitalization_id") %>% 
     mutate(
       albumin_baseline = if_else(
@@ -460,9 +463,9 @@
            time_block, 
            block_end) %>%
     left_join(clif_adt %>% 
-                select(hospital_block_id, hospital_id, in_dttm, out_dttm, location_category) %>% 
-                filter(!location_category %in% c("procedural", "radiology", "dialysis", "other")) %>% 
                 collect() %>% 
+                select(hospital_block_id, hospital_id, in_dttm, out_dttm, location_category) %>% 
+                filter(!str_to_lower(trimws(location_category)) %in% c("procedural", "radiology", "dialysis", "other")) %>% 
                 distinct(), 
               by = "hospital_block_id",
               relationship = "many-to-many") %>% #Each unique patient has >1 rows, each corresponding to a time block -> specify many-to-many 
@@ -522,13 +525,13 @@
   ##Temperature
   avg_temp <- vary_chars %>% 
     left_join(clif_vitals %>% 
+                collect() %>% 
                 select(patient_id,
                        recorded_dttm, 
                        vital_category,
                        vital_value) %>%
-                filter(vital_category == "temp_c",
-                       vital_value >= 32 & vital_value <= 44) %>%
-                collect() %>% 
+                filter(str_to_lower(trimws(vital_category)) == "temp_c",
+                       vital_value >= 32 & vital_value <= 44) %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -553,13 +556,13 @@
   ##MAP
   avg_map <- vary_chars %>% 
     left_join(clif_vitals %>% 
+                collect() %>% 
                 select(patient_id,
                        recorded_dttm, 
                        vital_category,
                        vital_value) %>%
-                filter(vital_category == "map",
+                filter(str_to_lower(trimws(vital_category)) == "map",
                        vital_value >= 30 & vital_value <= 250) %>%
-                collect() %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -584,10 +587,10 @@
   ##resp device
   resp_support <- vary_chars %>% 
     left_join(clif_respiratory_support %>% 
+                collect() %>% 
                 select(patient_id,
                        recorded_dttm, 
                        device_category) %>%
-                collect() %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -617,13 +620,13 @@
   ##heart rate
   avg_hr <- vary_chars %>% 
     left_join(clif_vitals %>% 
+                collect() %>% 
                 select(patient_id,
                        recorded_dttm, 
                        vital_category,
                        vital_value) %>%
-                filter(vital_category == "heart_rate",
+                filter(str_to_lower(trimws(vital_category)) == "heart_rate",
                        vital_value >= 0 & vital_value <= 300) %>%
-                collect() %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -651,9 +654,9 @@
   
   sodium <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
-                filter(lab_category == "sodium") %>% 
                 collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "sodium") %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -689,9 +692,9 @@
   
   potassium <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
-                filter(lab_category == "potassium") %>% 
                 collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "potassium") %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -726,9 +729,9 @@
   
   wbc <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
-                filter(lab_category == "wbc") %>% 
                 collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "wbc") %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -764,9 +767,9 @@
   
   bicarb <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
-                filter(lab_category == "bicarbonate") %>% 
                 collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "bicarbonate") %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -801,9 +804,9 @@
   
   lactate <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
-                filter(lab_category == "lactate") %>% 
                 collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "lactate") %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -839,9 +842,9 @@
   
   gcs_total <- vary_chars %>% 
     left_join(clif_patient_assessments %>% 
-                select(patient_id, recorded_dttm, assessment_category, numerical_value) %>%
-                filter(assessment_category == "gcs_total") %>% 
                 collect() %>% 
+                select(patient_id, recorded_dttm, assessment_category, numerical_value) %>%
+                filter(str_to_lower(trimws(assessment_category)) == "gcs_total") %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -892,9 +895,9 @@
   
   bilirubin_total <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
-                filter(lab_category == "bilirubin_total") %>% 
                 collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "bilirubin_total") %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -945,9 +948,9 @@
   
   platelet_count <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
-                filter(lab_category == "platelet_count") %>% 
                 collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "platelet_count") %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -998,9 +1001,9 @@
   
   creatinine <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
-                filter(lab_category == "creatinine") %>% 
                 collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "creatinine") %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -1051,9 +1054,9 @@
   
   pco2 <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
-                filter(lab_category %in% c("pco2_arterial", "pco2_venous")) %>% 
                 collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) %in% c("pco2_arterial", "pco2_venous")) %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -1088,9 +1091,9 @@
   
   ph <- vary_chars %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
-                filter(lab_category %in% c("ph_arterial", "ph_venous")) %>% 
                 collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) %in% c("ph_arterial", "ph_venous")) %>% 
                 distinct(),
               by = "patient_id",
               relationship = "many-to-many") %>%
@@ -1194,12 +1197,12 @@
     mutate(fio2_time_end = lead(fio2_time_start),
            fio2_time_end = if_else(row_number() == n(), t_0 + hours(24), fio2_time_end)) %>% 
     ungroup() %>% 
-    left_join(clif_vitals %>% 
+    left_join(clif_vitals %>%
+                collect() %>% 
                 select(patient_id, recorded_dttm, vital_category, vital_value) %>%
-                filter(vital_category == "spo2",
+                filter(str_to_lower(trimws(vital_category)) == "spo2",
                        vital_value >= SPO2_MIN, 
                        vital_value <= SPO2_MAX) %>% 
-                collect() %>% 
                 distinct(), 
               by = join_by(patient_id, 
                            fio2_time_start <= recorded_dttm,
@@ -1306,10 +1309,10 @@
            fio2_time_end = if_else(row_number() == n(), t_0 + hours(24), fio2_time_end)) %>% 
     ungroup() %>% 
     left_join(clif_labs %>% 
-                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 collect() %>%
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
                 mutate(pao2 = coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value)))) %>% 
-                filter(lab_category == "po2_arterial",
+                filter(str_to_lower(trimws(lab_category)) == "po2_arterial",
                        pao2 >= PAO2_MIN, 
                        pao2 <= PAO2_MAX) %>% 
                 distinct(), 
@@ -1357,20 +1360,20 @@
   ##Anti hypertensive drip dose
   antihypertensive_drip <- vary_chars %>% 
     left_join(clif_medication_admin_continuous %>% 
+                collect() %>% 
                 select(patient_id, 
                        med_category, 
                        mar_action_category,
                        admin_dttm) %>% 
-                filter(med_category %in% c("nicardipine",
+                filter(str_to_lower(trimws(med_category)) %in% c("nicardipine",
                                         "nitroglycerin",
                                         "nitroprusside",
                                         "labetalol",
                                         "esmolol"),
-                       mar_action_category %in% c("New Bag", 
-                                                  "Rate Change", 
-                                                  "Restarted", 
-                                                  "Rate Verify")) %>% 
-                collect() %>% 
+                       str_to_lower(trimws(mar_action_category)) %in% c("new bag", 
+                                                  "rate change", 
+                                                  "restarted", 
+                                                  "rate verify")) %>% 
                 distinct(), 
               by = join_by(patient_id, 
                            block_start <= admin_dttm, 
@@ -1390,16 +1393,16 @@
   ##Naloxone
   naloxone <- vary_chars %>% 
     left_join(clif_medication_admin_continuous %>% 
+                collect() %>% 
                 select(patient_id, 
                        med_category, 
                        mar_action_category,
                        admin_dttm) %>% 
                 filter(med_category %in% c("naloxone"),
-                       mar_action_category %in% c("New Bag", 
-                                                  "Rate Change", 
-                                                  "Restarted", 
-                                                  "Rate Verify")) %>% 
-                collect() %>% 
+                       str_to_lower(trimws(mar_action_category)) %in% c("new bag", 
+                                                  "rate change", 
+                                                  "restarted", 
+                                                  "rate verify")) %>% 
                 distinct(), 
               by = join_by(patient_id, 
                            block_start <= admin_dttm, 
@@ -1416,68 +1419,78 @@
     mutate(naloxone = coalesce(naloxone, FALSE))
   
   
-  ###Create a randomization indicator and transition indicator in baseline_chars
-  transition_baseline <- baseline_chars %>%
-    select(patient_id, t_0) %>% 
-    mutate(treatment_assignment_window_end = t_0 + hours(24),
-           t_negative2 = t_0 - hours(2)) %>% 
-    left_join(clif_adt %>% 
-                select(patient_id, location_category, in_dttm, out_dttm) %>% 
-                collect(),
-              by = join_by(patient_id, 
-                           t_negative2 <= out_dttm,
-                           treatment_assignment_window_end >= in_dttm)) %>% 
+  ##Create a treatment assignment time (first time patient transitions from ed to ICU or stepdown or censored)
+  trt_assignment_time <- baseline_chars %>%
+    select(patient_id, t_0) %>%
+    mutate(
+      treatment_assignment_window_end = t_0 + hours(24),
+      t_negative2 = t_0 - hours(2)
+    ) %>%
+    left_join(
+      clif_adt %>%
+        select(patient_id, location_category, in_dttm, out_dttm) %>%
+        collect() %>%
+        mutate(location_category = str_to_lower(trimws(location_category))),
+      by = join_by(
+        patient_id,
+        t_negative2 <= out_dttm,
+        treatment_assignment_window_end >= in_dttm
+      )
+    ) %>%
     arrange(patient_id, in_dttm) %>%
     group_by(patient_id) %>%
+    mutate(location_category = coalesce(location_category, "unknown")) %>%
     filter(location_category != lag(location_category) | is.na(lag(location_category))) %>%
     summarise(
+      t_0 = first(t_0),
+      treatment_assignment_window_end = first(treatment_assignment_window_end),
       treatment_transition_path = paste(location_category, collapse = " -> "),
+      
+      first_location = first(location_category),
+      first_location_time = first(in_dttm),
+      
+      first_non_ed_idx = {
+        idx <- which(location_category != "ed")
+        if (length(idx) == 0) NA_integer_ else idx[1]
+      },
+      
+      first_non_ed_location = if_else(
+        is.na(first_non_ed_idx),
+        "ed",
+        location_category[first_non_ed_idx]
+      ),
+      
+      first_non_ed_time = if_else(
+        is.na(first_non_ed_idx),
+        as.POSIXct(NA),
+        in_dttm[first_non_ed_idx]
+      ),
+      
       .groups = "drop"
     ) %>%
     mutate(
-      treatment_transition_path = coalesce(treatment_transition_path, "unknown"),
-      randomization = as.integer(
-        startsWith(treatment_transition_path, "ed -> icu") |
-          startsWith(treatment_transition_path, "ed -> stepdown")
+      treatment_assignment = case_when(
+        first_location != "ed" ~ "censored",
+        first_non_ed_location == "icu" ~ "icu",
+        first_non_ed_location == "stepdown" ~ "stepdown",
+        TRUE ~ "censored"
       ),
-      randomization = coalesce(randomization, 0L)
-    )
-  
-  
-  ##Create a treatment assignment time (first time patient transitions from ed to ICU or stepdown)
-  trt_assignment_time <- baseline_chars %>% 
-    select(patient_id, t_0) %>% 
-    left_join(transition_baseline %>% 
-                select(patient_id, randomization), 
-              by = "patient_id") %>% 
-    filter(randomization == 1) %>% 
-    mutate(treatment_assignment_window_end = t_0 + hours(24),
-           t_negative2 = t_0 - hours(2)) %>% 
-    left_join(clif_adt %>% 
-                select(patient_id, location_category, in_dttm, out_dttm) %>% 
-                collect(),
-              by = join_by(patient_id, 
-                           t_negative2 <= out_dttm,
-                           treatment_assignment_window_end >= in_dttm)) %>% 
-    filter(location_category %in% c("icu", "stepdown")) %>%
-    group_by(patient_id) %>%
-    summarise(treatment_assignment_time = min(in_dttm, na.rm = TRUE),
-              treatment_assignment = location_category[which.min(in_dttm)],
-              .groups = "drop")
+      
+      time_to_event = case_when(
+        first_location != "ed" ~ t_0,
+        treatment_assignment %in% c("icu", "stepdown") ~ first_non_ed_time,
+        first_non_ed_location != "ed" ~ first_non_ed_time,
+        TRUE ~ treatment_assignment_window_end
+      ),
+      
+      randomization = as.integer(treatment_assignment %in% c("icu", "stepdown"))
+    ) %>% 
+    select(patient_id, treatment_transition_path, treatment_assignment, time_to_event, randomization)
   
   #Join back useful cols from above
   baseline_chars <- baseline_chars %>% 
     left_join(trt_assignment_time,
-              by = "patient_id") %>% 
-    left_join(transition_baseline,
-              by = "patient_id") %>% 
-    select(
-      patient_id:elixhauser_count,
-      randomization,
-      treatment_assignment,
-      treatment_assignment_time,
-      treatment_transition_path
-    )
+              by = "patient_id")
 
 # -----------------  End defining baseline table and varying characteristics 
   
@@ -1485,7 +1498,7 @@
   
 # -----------------  Defining outcomes table
 
-  outcomes_chars <- vary_chars %>% 
+  outcomes_chars <- baseline_chars %>% 
     select(patient_id, hospital_block_id, t_0) %>% #t_0 is start of follow-up, as defined in SAP. 
     distinct()
   
@@ -1493,18 +1506,19 @@
   #Hospice discharge
   hospice_discharge <- outcomes_chars %>% 
     mutate(end_date = t_0 + days(28)) %>% 
-    left_join(clif_adt %>% 
-                select(patient_id, location_category, in_dttm) %>% 
-                filter(location_category == "hospice") %>% 
-                collect(),
+    left_join(clif_hospitalization %>% 
+                collect() %>% 
+                select(patient_id, discharge_category, admission_dttm) %>% 
+                filter(str_to_lower(trimws(discharge_category)) == "hospice") %>% 
+                distinct(),
               by = join_by(patient_id, 
-                           t_0 <= in_dttm,
-                           end_date >= in_dttm)) %>% 
+                           t_0 <= admission_dttm,
+                           end_date >= admission_dttm)) %>% 
     group_by(patient_id) %>%
     summarise(
-      hospice_transition = as.integer(any(!is.na(in_dttm))),
-      hospice_discharge_time_by_28d = if (any(!is.na(in_dttm))) {
-        min(in_dttm, na.rm = TRUE)
+      hospice_transition = as.integer(any(!is.na(admission_dttm))),
+      hospice_discharge_time_by_28d = if (any(!is.na(admission_dttm))) {
+        min(admission_dttm, na.rm = TRUE)
       } else {as.POSIXct(NA)},
       .groups = "drop"
     )
@@ -1514,25 +1528,16 @@
     mutate(end_date = t_0 + days(28)) %>% 
     left_join(
       clif_hospitalization %>% 
-        rename(patient_id = patient_id.x) %>% 
+        collect() %>% 
         select(patient_id, discharge_dttm, discharge_category) %>% 
-        filter(discharge_category == "Expired") %>% 
-        collect(),
-      by = "patient_id"
-    ) %>%
-    left_join(
-      clif_patient %>%
-        select(patient_id, death_dttm) %>%
-        collect(),
+        filter(str_to_lower(trimws(discharge_category)) == "expired") %>% 
+        distinct(),
       by = "patient_id"
     ) %>%
     mutate(
       death_time = case_when(
-        !is.na(death_dttm) & !is.na(discharge_dttm) ~ 
-          #we count in-hospital death, so death dttm, which is applied to a broader category of deaths, is only used
-          #when death dttm occurs during a hospalization (during which a death event is recorded). 
-          if_else(death_dttm <= discharge_dttm, death_dttm, discharge_dttm), 
-        TRUE ~ discharge_dttm
+        !is.na(discharge_dttm) ~ discharge_dttm, 
+        TRUE ~ as.POSIXct(NA)
       ),
       death_by_28d = if_else(
         !is.na(death_time) &
@@ -1566,47 +1571,39 @@
   #Hospice discharge
   hospice_discharge_60 <- outcomes_chars %>% 
     mutate(end_date = t_0 + days(60)) %>% 
-    left_join(clif_adt %>% 
-                select(patient_id, location_category, in_dttm) %>% 
-                filter(location_category == "hospice") %>% 
-                collect(),
+    left_join(clif_hospitalization %>% 
+                collect() %>% 
+                select(patient_id, discharge_category, admission_dttm) %>% 
+                filter(str_to_lower(trimws(discharge_category)) == "hospice") %>% 
+                distinct(),
               by = join_by(patient_id, 
-                           t_0 <= in_dttm,
-                           end_date >= in_dttm)) %>% 
+                           t_0 <= admission_dttm,
+                           end_date >= admission_dttm)) %>% 
     group_by(patient_id) %>%
     summarise(
-      hospice_discharge_time_by_60d = if (any(!is.na(in_dttm))) {
-        min(in_dttm, na.rm = TRUE)
-      } else {
-        as.POSIXct(NA)
-      },
+      hospice_transition = as.integer(any(!is.na(admission_dttm))),
+      hospice_discharge_time_by_60d = if (any(!is.na(admission_dttm))) {
+        min(admission_dttm, na.rm = TRUE)
+      } else {as.POSIXct(NA)},
       .groups = "drop"
     )
+  
   
   #Mortality
   mortality_60 <- outcomes_chars %>% 
     mutate(end_date = t_0 + days(60)) %>% 
     left_join(
       clif_hospitalization %>% 
-        rename(patient_id = patient_id.x) %>% 
+        collect() %>% 
         select(patient_id, discharge_dttm, discharge_category) %>% 
-        filter(discharge_category == "Expired") %>% 
-        collect(),
-      by = "patient_id"
-    ) %>%
-    left_join(
-      clif_patient %>%
-        select(patient_id, death_dttm) %>%
-        collect(),
+        filter(str_to_lower(trimws(discharge_category)) == "expired") %>% 
+        distinct(),
       by = "patient_id"
     ) %>%
     mutate(
       death_time = case_when(
-        !is.na(death_dttm) & !is.na(discharge_dttm) ~ 
-          #we count in-hospital death, so death dttm, which is applied to a broader category of deaths, is only used
-          #when death dttm occurs during a hospalization (during which a death event is recorded). 
-          if_else(death_dttm <= discharge_dttm, death_dttm, discharge_dttm), 
-        TRUE ~ discharge_dttm
+        !is.na(discharge_dttm) ~ discharge_dttm, 
+        TRUE ~ as.POSIXct(NA)
       ),
       death_by_60d = if_else(
         !is.na(death_time) &
@@ -1637,12 +1634,16 @@
   
   ##Respiratory  free days by day 28
   discharge_by_patient <- clif_hospitalization %>%
-    rename(patient_id = patient_id.x) %>%   
     select(patient_id, discharge_dttm) %>%
     collect() %>%
+    distinct() %>%
     group_by(patient_id) %>%
     summarise(
-      discharge_dttm = max(discharge_dttm, na.rm = TRUE),
+      discharge_dttm = if (all(is.na(discharge_dttm))) {
+        as.POSIXct(NA)
+      } else {
+        max(discharge_dttm, na.rm = TRUE)
+      },
       .groups = "drop"
     ) %>%
     mutate(
@@ -1662,7 +1663,8 @@
     left_join(
       clif_respiratory_support %>%
         select(patient_id, device_category, recorded_dttm) %>%
-        collect(),
+        collect() %>% 
+        distinct(),
       by = "patient_id"
     ) %>%
     filter(!is.na(recorded_dttm), recorded_dttm <= window_end) %>%
@@ -1675,9 +1677,9 @@
     ) %>%
     filter(interval_end > interval_start) %>%
     summarise(
-      room_air_days_28 = sum(
-        as.numeric(difftime(interval_end, interval_start, units = "hours"))[
-          device_category == "Room Air"
+      resp_support_free_days_28 = sum(as.numeric(difftime(interval_end, interval_start, units = "hours"))[
+          !is.na(device_category) &
+          !(str_to_lower(trimws(device_category)) %in% c("high flow nc", "imv", "nippv", "high_flow_nc"))
         ],
         na.rm = TRUE
       ) / 24,
@@ -1686,9 +1688,9 @@
   
   outcomes_chars <- outcomes_chars %>%
     left_join(room_air_days_28, by = "patient_id") %>%
-    mutate(room_air_days_28 = coalesce(room_air_days_28, 0),
-           room_air_days_28 = if_else(death_or_hospice_by_28d == 1, 0,room_air_days_28),
-           room_air_days_28 = as.integer(round(room_air_days_28)))
+    mutate(resp_support_free_days_28 = coalesce(resp_support_free_days_28, 0),
+           resp_support_free_days_28 = if_else(death_or_hospice_by_28d == 1, 0, resp_support_free_days_28),
+           resp_support_free_days_28 = as.integer(round(resp_support_free_days_28)))
   
   
   ##Escalation of care 
@@ -1697,9 +1699,10 @@
     mutate(end_date = t_0 + days(7)) %>%
     left_join(
       clif_respiratory_support %>%
+        collect() %>% 
+        distinct() %>%
         select(patient_id, device_category, recorded_dttm) %>%
-        filter(device_category == "IMV") %>%
-        collect(),
+        filter(str_to_lower(trimws(device_category)) == "imv"),
       by = join_by(
         patient_id,
         t_0 <= recorded_dttm,
