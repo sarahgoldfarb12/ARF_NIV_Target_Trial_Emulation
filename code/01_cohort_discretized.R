@@ -1419,7 +1419,7 @@
     mutate(naloxone = coalesce(naloxone, FALSE))
   
   
-  ##Create a treatment assignment time (first time patient transitions from ed to ICU or stepdown or censored)
+  ##Create a treatment assignment table (first time patient transitions from ed to ICU or stepdown or censored)
   trt_assignment_time <- baseline_chars %>%
     select(patient_id, t_0) %>%
     mutate(
@@ -1428,8 +1428,9 @@
     ) %>%
     left_join(
       clif_adt %>%
-        select(patient_id, location_category, in_dttm, out_dttm) %>%
         collect() %>%
+        select(patient_id, location_category, in_dttm, out_dttm) %>%
+        filter(!str_to_lower(trimws(location_category)) %in% c("procedural", "radiology", "dialysis", "other")) %>% 
         mutate(location_category = str_to_lower(trimws(location_category))),
       by = join_by(
         patient_id,
@@ -1440,11 +1441,15 @@
     arrange(patient_id, in_dttm) %>%
     group_by(patient_id) %>%
     mutate(location_category = coalesce(location_category, "unknown")) %>%
-    filter(location_category != lag(location_category) | is.na(lag(location_category))) %>%
     summarise(
       t_0 = first(t_0),
       treatment_assignment_window_end = first(treatment_assignment_window_end),
-      treatment_transition_path = paste(location_category, collapse = " -> "),
+      #Maps out the location transition of a patient during t0 and t0+24
+      treatment_transition_path = {
+        loc <- location_category
+        loc <- loc[c(TRUE, loc[-1] != loc[-length(loc)])] #Don't want repetitive location updates, e.g., ED -> Ed -> ED
+        paste(loc, collapse = " -> ")
+        },
       
       first_location = first(location_category),
       first_location_time = first(in_dttm),
@@ -1456,7 +1461,7 @@
       
       first_non_ed_location = if_else(
         is.na(first_non_ed_idx),
-        "ed",
+        NA_character_,
         location_category[first_non_ed_idx]
       ),
       
@@ -1466,31 +1471,67 @@
         in_dttm[first_non_ed_idx]
       ),
       
+      latest_out_dttm = if_else(all(is.na(out_dttm)), 
+                                as.POSIXct(NA),
+                                max(out_dttm, na.rm = TRUE)),
+      
       .groups = "drop"
     ) %>%
     mutate(
-      treatment_assignment = case_when(
-        first_location != "ed" ~ "censored",
-        first_non_ed_location == "icu" ~ "icu",
-        first_non_ed_location == "stepdown" ~ "stepdown",
-        TRUE ~ "censored"
+      treatment = case_when(
+        #we expect everyone to start in the ED, adding as defensive coding
+        first_location != "ed" ~ NA_integer_,
+        first_non_ed_location == "icu" ~ 0L,
+        first_non_ed_location == "stepdown" ~ 1L,
+        TRUE ~ NA_integer_
       ),
       
       time_to_event = case_when(
+        #not starting in ED
         first_location != "ed" ~ t_0,
-        treatment_assignment %in% c("icu", "stepdown") ~ first_non_ed_time,
-        first_non_ed_location != "ed" ~ first_non_ed_time,
-        TRUE ~ treatment_assignment_window_end
+        #assigned ICU/stepdown -> time = when they moved into ICU/stepdown
+        first_non_ed_location %in% c("icu", "stepdown") ~ first_non_ed_time,
+        #assigned a non ICU/stepdown location that is not NA, e.g., ward. 
+        !is.na(first_non_ed_location) ~ first_non_ed_time,
+        #only stayed in ED -> censor at earlier of 24h or latest out_dttm
+        TRUE ~ pmin(treatment_assignment_window_end,
+                    coalesce(latest_out_dttm, treatment_assignment_window_end))
       ),
       
-      randomization = as.integer(treatment_assignment %in% c("icu", "stepdown"))
+      randomization = as.integer(treatment %in% c(0L, 1L))
     ) %>% 
-    select(patient_id, treatment_transition_path, treatment_assignment, time_to_event, randomization)
+    select(patient_id, treatment_transition_path, treatment, time_to_event, randomization)
   
-  #Join back useful cols from above
+  #Join back useful cols from above to baseline
   baseline_chars <- baseline_chars %>% 
-    left_join(trt_assignment_time,
+    left_join(trt_assignment_time, 
               by = "patient_id")
+  
+  #Join back useful cols from above to varying characteristics
+  vary_chars <- vary_chars %>% 
+    left_join(trt_assignment_time, by = "patient_id") %>% 
+    group_by(patient_id) %>%
+    arrange(block_start, .by_group = TRUE) %>%
+    mutate(
+      max_block_end = max(block_end, na.rm = TRUE),
+      
+      event_block = !is.na(time_to_event) &
+        (
+          (time_to_event >= block_start & time_to_event < block_end) | 
+            (time_to_event == block_end & block_end == max_block_end)
+        ),
+      
+      treatment = if_else(event_block, treatment, NA_integer_),
+      
+      censor = as.integer(event_block & is.na(treatment)),
+      
+      at_risk = 1L,
+      
+      stop_row = cumsum(event_block)
+    ) %>%
+    ungroup() %>%
+    filter(stop_row == 0 | event_block) %>%
+    select(-event_block, -stop_row, -max_block_end)
 
 # -----------------  End defining baseline table and varying characteristics 
   
@@ -1758,7 +1799,7 @@
   write_csv(vary_chars, paste0(project_location, "/private_tables/vary_chars.csv"))
   
   #Save outcome variables
-  write_csv(vary_chars, paste0(project_location, "/private_tables/outcomes_chars.csv"))
+  write_csv(outcomes_chars, paste0(project_location, "/private_tables/outcomes_chars.csv"))
   
   
 # -----------------  End exporting data
