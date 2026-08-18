@@ -529,6 +529,44 @@
     select(-start_dttm, -end_dttm) %>%
     ungroup() 
   
+  #Borrow code status from admission to t_0 for remaining leading missing code_status_category
+  code_status_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_code_status %>% 
+                collect() %>%
+                distinct(),
+              by = "patient_id",
+              relationship = "many-to-many") %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(start_dttm, .by_group = TRUE) %>%
+    mutate(end_dttm = lead(start_dttm)) %>%
+    filter(start_dttm >= admission_dttm & start_dttm <= t_0) %>%
+    arrange(desc(start_dttm), .by_group = TRUE) %>%
+    slice(1) %>%
+    ungroup() %>%
+    select(patient_id, hospital_block_id, code_status_category_t0 = code_status_category)
+  
+  vary_chars <- vary_chars %>% 
+    left_join(code_status_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(code_status_category = if_else(
+      is.na(code_status_category) & cumsum(!is.na(code_status_category)) == 0,
+      code_status_category_t0,
+      code_status_category
+    )) %>%
+    ungroup() %>%
+    select(-code_status_category_t0)
+  
   
   ##Temperature
   avg_temp <- vary_chars %>% 
@@ -561,6 +599,47 @@
     ungroup()
   
   
+  #Borrow temp from admission to t_0 for remaining leading missing temp
+  temp_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_vitals %>% 
+                collect() %>% 
+                select(patient_id,
+                       recorded_dttm, 
+                       vital_category,
+                       vital_value) %>%
+                filter(str_to_lower(trimws(vital_category)) == "temp_c",
+                       vital_value >= 32 & vital_value <= 44) %>% 
+                distinct(),
+              by = "patient_id",
+              relationship = "many-to-many") %>%
+    filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(temp_t0 = mean(vital_value, na.rm = TRUE),
+              .groups = "drop")
+  
+  vary_chars <- vary_chars %>% 
+    left_join(temp_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(temp = if_else(
+      is.na(temp) & cumsum(!is.na(temp)) == 0,
+      temp_t0,
+      temp
+    )) %>%
+    ungroup() %>%
+    select(-temp_t0)
+  
+  
   ##MAP
   avg_map <- vary_chars %>% 
     left_join(clif_vitals %>% 
@@ -590,6 +669,46 @@
     arrange(time_block, .by_group = TRUE) %>%
     tidyr::fill(avg_map, .direction = "down") %>%
     ungroup()
+  
+  #Borrow MAP from admission to t_0 for remaining leading missing avg_map
+  map_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_vitals %>% 
+                collect() %>% 
+                select(patient_id,
+                       recorded_dttm, 
+                       vital_category,
+                       vital_value) %>%
+                filter(str_to_lower(trimws(vital_category)) == "map",
+                       vital_value >= 30 & vital_value <= 250) %>%
+                distinct(),
+              by = "patient_id",
+              relationship = "many-to-many") %>%
+    filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(avg_map_t0 = mean(vital_value, na.rm = TRUE),
+              .groups = "drop")
+  
+  vary_chars <- vary_chars %>% 
+    left_join(map_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(avg_map = if_else(
+      is.na(avg_map) & cumsum(!is.na(avg_map)) == 0,
+      avg_map_t0,
+      avg_map
+    )) %>%
+    ungroup() %>%
+    select(-avg_map_t0)
   
   
   ##resp device
@@ -624,6 +743,45 @@
     tidyr::fill(device_category, .direction = "down") %>%
     ungroup()
   
+  #Borrow resp device from admission to t_0 for remaining leading missing device_category
+  resp_support_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_respiratory_support %>% 
+                collect() %>% 
+                select(patient_id,
+                       recorded_dttm, 
+                       device_category) %>%
+                distinct(),
+              by = "patient_id",
+              relationship = "many-to-many") %>%
+    filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    arrange(desc(recorded_dttm), .by_group = TRUE) %>%
+    slice(1) %>% 
+    ungroup() %>%
+    select(patient_id, hospital_block_id, device_category_t0 = device_category)
+  
+  vary_chars <- vary_chars %>% 
+    left_join(resp_support_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(device_category = if_else(
+      is.na(device_category) & cumsum(!is.na(device_category)) == 0,
+      device_category_t0,
+      device_category
+    )) %>%
+    ungroup() %>%
+    select(-device_category_t0)
+  
   
   ##heart rate
   avg_hr <- vary_chars %>% 
@@ -654,6 +812,46 @@
     arrange(time_block, .by_group = TRUE) %>%
     tidyr::fill(avg_hr, .direction = "down") %>%
     ungroup() 
+  
+  #Borrow heart rate from admission to t_0 for remaining leading missing avg_hr
+  hr_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_vitals %>% 
+                collect() %>% 
+                select(patient_id,
+                       recorded_dttm, 
+                       vital_category,
+                       vital_value) %>%
+                filter(str_to_lower(trimws(vital_category)) == "heart_rate",
+                       vital_value >= 0 & vital_value <= 300) %>%
+                distinct(),
+              by = "patient_id",
+              relationship = "many-to-many") %>%
+    filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(avg_hr_t0 = mean(vital_value, na.rm = TRUE),
+              .groups = "drop")
+  
+  vary_chars <- vary_chars %>% 
+    left_join(hr_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(avg_hr = if_else(
+      is.na(avg_hr) & cumsum(!is.na(avg_hr)) == 0,
+      avg_hr_t0,
+      avg_hr
+    )) %>%
+    ungroup() %>%
+    select(-avg_hr_t0)
   
   
   #Sodium
@@ -1616,6 +1814,54 @@
       )
     ) %>%
     ungroup()
+  
+  ph_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_labs %>% 
+                collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) %in% c("ph_arterial", "ph_venous")) %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      ph = if_else(
+        !is.na(lab_collect_dttm),
+        coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value))),
+        NA_real_
+      )
+    ) %>% 
+    filter(
+      lab_collect_dttm >= admission_dttm,
+      lab_collect_dttm <= t_0,
+      ph >= PH_MIN,
+      ph <= PH_MAX
+    ) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(
+      avg_ph_t0 = mean(ph, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  vary_chars <- vary_chars %>% 
+    left_join(ph_t0,
+              by = c("patient_id", "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(avg_ph = if_else(
+      is.na(avg_ph) & cumsum(!is.na(avg_ph)) == 0,
+      as.character(avg_ph_t0),
+      avg_ph
+    )) %>%
+    ungroup() %>%
+    select(-avg_ph_t0)
+  
   
   ##SF ratio
   SPO2_MIN = outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "spo2"]
