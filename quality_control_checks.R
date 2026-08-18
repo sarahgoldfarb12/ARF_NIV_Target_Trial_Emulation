@@ -201,14 +201,15 @@ keep_cols <- c(
   "block_end",
   "treatment",
   "time_to_event",
-  "censor"
+  "censor",
+  "at_risk"
 )
 
 check_vary(
   data = vary_chars ,
   ids = sample_ids,
   print_n = 100,
-  exclude_cols = setdiff(names(test), keep_cols),
+  exclude_cols = setdiff(names(vary_chars), keep_cols),
   group = c("patient_id")
 ) %>% 
   View()
@@ -260,5 +261,42 @@ qa1 <- outcomes_chars %>%
 
 ##D.Escalation logic matches randomization
 table(qa1$randomization, qa1$escalation_status_7d, useNA = "ifany")
+
+
+
+###Missingness
+baseline_missingness <- baseline_chars %>%
+  summarise(across(
+    c(year, age, albumin_baseline:elixhauser_count),
+    ~ sum(is.na(.x))
+  )) %>%
+  pivot_longer(
+    everything(),
+    names_to = "variable",
+    values_to = "n_missing"
+  ) %>%
+  mutate(
+    percent_missing = round(100 * n_missing / nrow(baseline_chars), 1)
+  ) %>%
+  arrange(desc(percent_missing))
+
+baseline_missingness
+
+vary_missingness <- vary_chars %>%
+  summarise(across(
+    code_status_category:naloxone,
+    ~ sum(is.na(.x))
+  )) %>%
+  pivot_longer(
+    everything(),
+    names_to = "variable",
+    values_to = "n_missing"
+  ) %>%
+  mutate(
+    percent_missing = round(100 * n_missing / nrow(vary_chars), 1)
+  ) %>%
+  arrange(desc(percent_missing))
+
+vary_missingness
 
 

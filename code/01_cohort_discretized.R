@@ -434,26 +434,34 @@
   ##Create scaffold of 2 hour time blocks
   vary_chars <- baseline_chars %>% 
     select(patient_id, hospital_block_id, t_0) %>%
-    crossing(time_block = as.integer(seq(-2,22,by = 2))) %>% #Keep t-2 to t0 block to make carrying forward easier. 
+    crossing(time_block = as.integer(seq(-2,22,by = 2))) %>% #Allow 
     mutate(block_start = t_0 + hours(time_block),
            block_end = t_0 + hours(time_block + 2)) 
   
-  ##Create a time-aware link table that connects patient_id and the hospitalization_ids (occurring <= 24 hours after t_0)
-  ##NOTE: optional table, since we have already linked patient id to the clif tables
-  hospital_block_key_obj_24hours <- final_cohort %>% 
-    select(patient_id, hospital_block_id, t_0) %>% 
-    #All hospitalizations of the patients in final cohort
-    inner_join(hospital_block_key_obj %>% select(patient_id, hospital_block_id, hospitalization_id) %>% collect(),
-               by = c("patient_id", "hospital_block_id")) %>% 
-    #Filter hospitalizations that occur within t_0 - 2 hours -- t_0 + 24 hours
-    mutate(window_24hour_start = t_0 - hours(2),
-           window_24hour_end = t_0 + hours(24)) %>% 
+  ##Join with hospitalization id
+  vary_chars <- vary_chars %>% 
     left_join(clif_hospitalization %>% 
-                select(hospitalization_id, admission_dttm, discharge_dttm) %>% 
-                collect(), 
-              by = "hospitalization_id") %>% 
-    filter(admission_dttm <= window_24hour_end,
-           is.na(discharge_dttm) | discharge_dttm >= window_24hour_start)
+                select(patient_id, hospitalization_id, discharge_dttm, admission_dttm) %>% 
+                collect() %>% 
+                #Some patients might not have a discharge time (no record of discharge)
+                mutate(discharge_dttm_join = coalesce(discharge_dttm, 
+                                                      as.POSIXct("9999-12-31 23:59:59", tz = "UTC"))) %>% 
+                distinct(), 
+              by = join_by(patient_id, 
+                           block_start < discharge_dttm_join,
+                           block_end > admission_dttm)) %>%
+    group_by(patient_id, time_block) %>%
+    #If a time block traverses multiple hospitalizations, select the one closest to the end of the time block. 
+    arrange(desc(admission_dttm), .by_group = TRUE) %>% 
+    slice(1) %>%
+    ungroup() %>% 
+    select(-discharge_dttm, -discharge_dttm_join, -admission_dttm) %>% 
+    #Some patients leave the ER before t+24, making their hospitalization_id NA for the corresponding time blocks. 
+    group_by(patient_id) %>% 
+    arrange(time_block, .by_group = TRUE) %>% 
+    tidyr::fill(hospitalization_id, .direction = "down") %>% 
+    ungroup() 
+    
   
   # ----- Transforming variables into varying characteristics table
   
@@ -685,6 +693,49 @@
     tidyr::fill(avg_sodium, .direction = "down") %>%
     ungroup() 
   
+  #Borrow sodium from admission to t_0 for remaining missing avg_sodium
+  sodium_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_labs %>% 
+                collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "sodium") %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      sodium = if_else(
+        !is.na(lab_collect_dttm),
+        coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value))),
+        NA_real_
+      )
+    ) %>% 
+    filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+           sodium >= SODIUM_MIN & sodium <= SODIUM_MAX) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(avg_sodium_t0 = mean(sodium, na.rm = TRUE),
+              .groups = "drop")
+  
+  vary_chars <- vary_chars %>% 
+    left_join(sodium_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(avg_sodium = if_else(
+      is.na(avg_sodium) & cumsum(!is.na(avg_sodium)) == 0,
+      avg_sodium_t0,
+      avg_sodium
+    )) %>%
+    ungroup() %>%
+    select(-avg_sodium_t0)
+  
   
   ##potassium
   POTASSIUM_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "potassium"]
@@ -723,6 +774,50 @@
     tidyr::fill(avg_potassium, .direction = "down") %>%
     ungroup() 
   
+  #Borrow potassium from admission to t_0 for remaining missing avg_potassium
+  potassium_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_labs %>% 
+                collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "potassium") %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      potassium = if_else(
+        !is.na(lab_collect_dttm),
+        coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value))),
+        NA_real_
+      )
+    ) %>% 
+    filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+           potassium >= POTASSIUM_MIN & potassium <= POTASSIUM_MAX) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(avg_potassium_t0 = mean(potassium, na.rm = TRUE),
+              .groups = "drop")
+  
+  vary_chars <- vary_chars %>% 
+    left_join(potassium_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(avg_potassium = if_else(
+      is.na(avg_potassium) & cumsum(!is.na(avg_potassium)) == 0,
+      avg_potassium_t0,
+      avg_potassium
+    )) %>%
+    ungroup() %>%
+    select(-avg_potassium_t0)
+  
+  
   ##WBC
   WBC_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "wbc"]
   WBC_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "wbc"]
@@ -760,6 +855,48 @@
     tidyr::fill(avg_wbc, .direction = "down") %>%
     ungroup()
   
+  #Borrow WBC from admission to t_0 for remaining missing avg_wbc
+  wbc_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_labs %>% 
+                collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "wbc") %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      wbc = if_else(
+        !is.na(lab_collect_dttm),
+        coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value))),
+        NA_real_
+      )
+    ) %>% 
+    filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+           wbc >= WBC_MIN & wbc <= WBC_MAX) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(avg_wbc_t0 = mean(wbc, na.rm = TRUE),
+              .groups = "drop")
+  
+  vary_chars <- vary_chars %>% 
+    left_join(wbc_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(avg_wbc = if_else(
+      is.na(avg_wbc) & cumsum(!is.na(avg_wbc)) == 0,
+      avg_wbc_t0,
+      avg_wbc
+    )) %>%
+    ungroup() %>%
+    select(-avg_wbc_t0)
   
   ##Bicarb
   BICARB_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "bicarb"]
@@ -798,7 +935,50 @@
     tidyr::fill(avg_bicarb, .direction = "down") %>%
     ungroup()
   
-  #Lactate
+  #Borrow bicarb from admission to t_0 for remaining missing avg_bicarb
+  bicarb_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_labs %>% 
+                collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "bicarbonate") %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      bicarb = if_else(
+        !is.na(lab_collect_dttm),
+        coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value))),
+        NA_real_
+      )
+    ) %>% 
+    filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+           bicarb >= BICARB_MIN & bicarb <= BICARB_MAX) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(avg_bicarb_t0 = mean(bicarb, na.rm = TRUE),
+              .groups = "drop")
+  
+  vary_chars <- vary_chars %>% 
+    left_join(bicarb_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(avg_bicarb = if_else(
+      is.na(avg_bicarb) & cumsum(!is.na(avg_bicarb)) == 0,
+      avg_bicarb_t0,
+      avg_bicarb
+    )) %>%
+    ungroup() %>%
+    select(-avg_bicarb_t0)
+  
+  ##Lactate
   LACTATE_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "lactate"]
   LACTATE_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "lactate"]
   
@@ -834,6 +1014,49 @@
     arrange(time_block, .by_group = TRUE) %>%
     tidyr::fill(avg_lactate, .direction = "down") %>%
     ungroup()
+  
+  #Borrow lactate from admission to t_0 for remaining missing avg_lactate
+  lactate_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_labs %>% 
+                collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "lactate") %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      lactate = if_else(
+        !is.na(lab_collect_dttm),
+        coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value))),
+        NA_real_
+      )
+    ) %>% 
+    filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+           lactate >= LACTATE_MIN & lactate <= LACTATE_MAX) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(avg_lactate_t0 = mean(lactate, na.rm = TRUE),
+              .groups = "drop")
+  
+  vary_chars <- vary_chars %>% 
+    left_join(lactate_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(avg_lactate = if_else(
+      is.na(avg_lactate) & cumsum(!is.na(avg_lactate)) == 0,
+      avg_lactate_t0,
+      avg_lactate
+    )) %>%
+    ungroup() %>%
+    select(-avg_lactate_t0)
   
   
   ##Sofa_brain
@@ -889,6 +1112,61 @@
     ungroup() %>% 
     select(-avg_gcs)
   
+  #Borrow GCS from admission to t_0 for remaining missing sofa_brain
+  gcs_total_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_patient_assessments %>% 
+                collect() %>% 
+                select(patient_id, recorded_dttm, assessment_category, numerical_value) %>%
+                filter(str_to_lower(trimws(assessment_category)) == "gcs_total") %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      gcs_total = if_else(
+        !is.na(recorded_dttm),
+        numerical_value,
+        NA_real_
+      )
+    ) %>% 
+    filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0,
+           gcs_total >= GCS_MIN & gcs_total <= GCS_MAX) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(avg_gcs_t0 = mean(gcs_total, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(
+      sofa_brain_t0 = case_when(
+        is.na(avg_gcs_t0) ~ NA_character_,
+        avg_gcs_t0 >= 15 ~ "0",
+        avg_gcs_t0 >= 13 & avg_gcs_t0 < 15 ~ "1",
+        avg_gcs_t0 >= 10 & avg_gcs_t0 < 13 ~ "2",
+        avg_gcs_t0 >= 6  & avg_gcs_t0 < 10 ~ "3",
+        avg_gcs_t0 < 6 ~ "4"
+      )
+    ) %>%
+    select(patient_id, hospital_block_id, sofa_brain_t0)
+  
+  vary_chars <- vary_chars %>% 
+    left_join(gcs_total_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(sofa_brain = if_else(
+      is.na(sofa_brain) & cumsum(!is.na(sofa_brain)) == 0,
+      sofa_brain_t0,
+      sofa_brain
+    )) %>%
+    ungroup() %>%
+    select(-sofa_brain_t0)
+  
+  
   #Sofa_liver
   BILIRUBIN_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "bilirubin_total"]
   BILIRUBIN_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "bilirubin_total"]
@@ -941,6 +1219,61 @@
     ) %>%
     ungroup() %>% 
     select(-bilirubin_total)
+  
+  #Borrow bilirubin from admission to t_0 for remaining missing sofa_liver
+  bilirubin_total_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_labs %>% 
+                collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "bilirubin_total") %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      bilirubin_total = if_else(
+        !is.na(lab_collect_dttm),
+        coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value))),
+        NA_real_
+      )
+    ) %>% 
+    filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+           bilirubin_total >= BILIRUBIN_MIN & bilirubin_total <= BILIRUBIN_MAX) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(bilirubin_total_t0 = mean(bilirubin_total, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(
+      sofa_liver_t0 = case_when(
+        is.na(bilirubin_total_t0) ~ NA_character_,
+        bilirubin_total_t0 < 1.2 ~ "0",
+        bilirubin_total_t0 >= 1.2 & bilirubin_total_t0 < 2.0 ~ "1",
+        bilirubin_total_t0 >= 2.0 & bilirubin_total_t0 < 6.0 ~ "2",
+        bilirubin_total_t0 >= 6.0 & bilirubin_total_t0 < 12.0 ~ "3",
+        bilirubin_total_t0 >= 12.0 ~ "4"
+      )
+    ) %>%
+    select(patient_id, hospital_block_id, sofa_liver_t0)
+  
+  vary_chars <- vary_chars %>% 
+    left_join(bilirubin_total_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(sofa_liver = if_else(
+      is.na(sofa_liver) & cumsum(!is.na(sofa_liver)) == 0,
+      sofa_liver_t0,
+      sofa_liver
+    )) %>%
+    ungroup() %>%
+    select(-sofa_liver_t0)
+  
   
   #Sofa_coagulation
   PLATELET_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "platelet_count"]
@@ -995,6 +1328,61 @@
     ungroup() %>% 
     select(-platelet_count)
   
+  #Borrow platelet count from admission to t_0 for remaining missing sofa_coagulation
+  platelet_count_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_labs %>% 
+                collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "platelet_count") %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      platelet_count = if_else(
+        !is.na(lab_collect_dttm),
+        coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value))),
+        NA_real_
+      )
+    ) %>% 
+    filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+           platelet_count >= PLATELET_MIN & platelet_count <= PLATELET_MAX) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(platelet_count_t0 = mean(platelet_count, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(
+      sofa_coagulation_t0 = case_when(
+        is.na(platelet_count_t0) ~ NA_character_,
+        platelet_count_t0 >= 150 ~ "0",
+        platelet_count_t0 >= 100 & platelet_count_t0 < 150 ~ "1",
+        platelet_count_t0 >= 50 & platelet_count_t0 < 100 ~ "2",
+        platelet_count_t0 >= 20 & platelet_count_t0 < 50 ~ "3",
+        platelet_count_t0 < 20 ~ "4"
+      )
+    ) %>%
+    select(patient_id, hospital_block_id, sofa_coagulation_t0)
+  
+  vary_chars <- vary_chars %>% 
+    left_join(platelet_count_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(sofa_coagulation = if_else(
+      is.na(sofa_coagulation) & cumsum(!is.na(sofa_coagulation)) == 0,
+      sofa_coagulation_t0,
+      sofa_coagulation
+    )) %>%
+    ungroup() %>%
+    select(-sofa_coagulation_t0)
+  
+  
   #Sofa_kidney
   CREATININE_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "creatinine"]
   CREATININE_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "creatinine"]
@@ -1048,6 +1436,61 @@
     ungroup() %>% 
     select(-avg_creatinine)
   
+  #Borrow creatinine from admission to t_0 for remaining missing sofa_kidney
+  creatinine_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_labs %>% 
+                collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) == "creatinine") %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      creatinine = if_else(
+        !is.na(lab_collect_dttm),
+        coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value))),
+        NA_real_
+      )
+    ) %>% 
+    filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+           creatinine >= CREATININE_MIN & creatinine <= CREATININE_MAX) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(avg_creatinine_t0 = mean(creatinine, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(
+      sofa_kidney_t0 = case_when(
+        is.na(avg_creatinine_t0) ~ NA_character_,
+        avg_creatinine_t0 < 1.2 ~ "0",
+        avg_creatinine_t0 >= 1.2 & avg_creatinine_t0 < 2.0 ~ "1",
+        avg_creatinine_t0 >= 2.0 & avg_creatinine_t0 < 3.5 ~ "2",
+        avg_creatinine_t0 >= 3.5 & avg_creatinine_t0 < 5.0 ~ "3",
+        avg_creatinine_t0 >= 5.0 ~ "4"
+      )
+    ) %>%
+    select(patient_id, hospital_block_id, sofa_kidney_t0)
+  
+  vary_chars <- vary_chars %>% 
+    left_join(creatinine_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(sofa_kidney = if_else(
+      is.na(sofa_kidney) & cumsum(!is.na(sofa_kidney)) == 0,
+      sofa_kidney_t0,
+      sofa_kidney
+    )) %>%
+    ungroup() %>%
+    select(-sofa_kidney_t0)
+  
+  
   #PCO2  
   PCO2_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "pco2_arterial"]
   PCO2_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "pco2_arterial"]
@@ -1084,6 +1527,50 @@
     arrange(time_block, .by_group = TRUE) %>%
     tidyr::fill(avg_pco2, .direction = "down") %>%
     ungroup()
+  
+  #Borrow PCO2 from admission to t_0 for remaining missing avg_pco2
+  pco2_t0 <- vary_chars %>% 
+    filter(time_block == 0) %>%
+    select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+    distinct() %>%
+    left_join(clif_hospitalization %>%
+                select(patient_id, hospitalization_id, admission_dttm) %>%
+                collect() %>%
+                distinct(),
+              by = c("patient_id", "hospitalization_id")) %>%
+    left_join(clif_labs %>% 
+                collect() %>% 
+                select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
+                filter(str_to_lower(trimws(lab_category)) %in% c("pco2_arterial", "pco2_venous")) %>% 
+                distinct(),
+              by = "patient_id") %>%
+    mutate(
+      pco2 = if_else(
+        !is.na(lab_collect_dttm),
+        coalesce(lab_value_numeric, suppressWarnings(as.numeric(lab_value))),
+        NA_real_
+      )
+    ) %>% 
+    filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+           pco2 >= PCO2_MIN & pco2 <= PCO2_MAX) %>% 
+    group_by(patient_id, hospital_block_id) %>% 
+    summarise(avg_pco2_t0 = mean(pco2, na.rm = TRUE),
+              .groups = "drop")
+  
+  vary_chars <- vary_chars %>% 
+    left_join(pco2_t0,
+              by = c("patient_id",
+                     "hospital_block_id")) %>%
+    group_by(patient_id, hospital_block_id) %>%
+    arrange(time_block, .by_group = TRUE) %>%
+    mutate(avg_pco2 = if_else(
+      is.na(avg_pco2) & cumsum(!is.na(avg_pco2)) == 0,
+      avg_pco2_t0,
+      avg_pco2
+    )) %>%
+    ungroup() %>%
+    select(-avg_pco2_t0)
+  
   
   #PH
   PH_MIN <- outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "ph_venous"]
@@ -1244,6 +1731,7 @@
   vary_chars <- vary_chars_SF5 %>% 
     select(-device_period_new)
     
+  
   ##PF ratio
   PAO2_MIN = outlier_thresholds$lower_limit[outlier_thresholds$variable_name == "pao2"]
   PAO2_MAX <- outlier_thresholds$upper_limit[outlier_thresholds$variable_name == "pao2"]
@@ -1283,7 +1771,6 @@
     tidyr::fill(fio2_set, .direction = "down") %>%
     tidyr::fill(fio2_set, .direction = "up") %>% 
     ungroup() 
-  
   
   #Intermediate DF3:handle edge cases: Although SF ratio for a given time block is calculated as the average of individual SF ratios, there is one and
   #only one device per time block. Therefore, We will limit fio2 records within any given block to those from the last device at the end 
