@@ -2357,63 +2357,73 @@ mortality <- outcomes_chars %>%
   )
 
 
-#Alive discharge/censoring 
+#Alive discharge/censoring from hospital
 discharge_censor <- outcomes_chars %>% 
   mutate(end_date = t_0 + days(28)) %>% 
-  left_join(
-    clif_hospitalization %>% 
-      collect() %>% 
-      select(patient_id, hospital_block_id, admission_dttm, discharge_dttm, discharge_category) %>% 
-      filter(str_to_lower(trimws(discharge_category)) != "expired") %>%
-      filter(str_to_lower(trimws(discharge_category)) != "hospice") %>%
-      distinct(),
-    by = c("patient_id", "hospital_block_id")
-  ) %>%
-  left_join(
-    baseline_chars %>%
-      select(patient_id, hospital_block_id, treatment, time_to_assignment) %>%
-      distinct(),
-    by = c("patient_id", "hospital_block_id")
-  ) %>%
-  filter(
-    #Filter on hospitalizations within the 28 day period
-    admission_dttm <= end_date,
-    is.na(discharge_dttm) | discharge_dttm >= t_0
-  ) %>%
-  group_by(patient_id, hospital_block_id) %>% 
-  arrange(discharge_dttm, .by_group = TRUE) %>% 
-  mutate(
-    #If discharge_dttm is non-missing, occurs within 28 days of t_0, and does not occur
-    #before ICU/stepdown assignment among patients assigned to ICU/stepdown, then discharge_censor_dttm_by_28d is set to discharge_dttm. 
-    #Otherwise, it is set to NA.
-    #
-    #This serves as a guardrail for patients with a continuous inpatient stay that spans
-    #multiple hospitalization records, where the hospitalization id may change before or at the time of ICU/stepdown assignment.
-    discharge_censor_dttm_by_28d = if_else(
-      !is.na(discharge_dttm) &
-        discharge_dttm >= t_0 &
-        discharge_dttm <= end_date &
-        !(
-          treatment %in% c(0L, 1L) &
-            !is.na(time_to_assignment) &
-            discharge_dttm < time_to_assignment
-        ),
-      discharge_dttm,
+  left_join(clif_hospitalization %>% 
+              collect() %>% 
+              select(patient_id, hospital_block_id, hospitalization_id,
+                     admission_dttm, discharge_dttm, discharge_category) %>% 
+              distinct() %>% 
+              #This inner join is a guardrail, ensuring among those with multiple hospitalizations, only hospitlaizations 
+              #considered a part of the same hospital stay can contribute to discharge date determination in the below code. 
+              inner_join(hospital_block_key_obj %>% 
+                           collect(),
+                         by = c("patient_id", "hospital_block_id", "hospitalization_id"),
+                         relationship = "many-to-many"),
+            by = c("patient_id", "hospital_block_id")) %>%
+  left_join(baseline_chars %>%
+              select(patient_id, hospital_block_id, treatment, time_to_assignment) %>%
+              distinct(),
+            by = c("patient_id", "hospital_block_id")) %>%
+  filter(admission_dttm <= end_date,
+         is.na(discharge_dttm) | discharge_dttm >= t_0) %>%
+  group_by(patient_id, hospital_block_id) %>%
+  arrange(discharge_dttm, .by_group = TRUE) %>%
+  summarise(
+    t_0 = first(t_0),
+    end_date = first(end_date),
+    treatment = first(treatment),
+    time_to_assignment = first(time_to_assignment),
+    
+    terminal_discharge_dttm = if (all(is.na(discharge_dttm))) {
       as.POSIXct(NA)
+    } else {
+      max(discharge_dttm, na.rm = TRUE) #Accounting for multiple hospitalizations during the same stay 
+    },
+    
+    terminal_discharge_category = if (all(is.na(discharge_dttm))) {
+      NA_character_
+    } else {
+      discharge_category[which.max(coalesce(discharge_dttm, as.POSIXct("1900-01-01", tz = "UTC")))]
+    },
+    
+    .groups = "drop"
+  ) %>%
+  mutate(
+    terminal_discharge_category_clean = str_to_lower(trimws(terminal_discharge_category)),
+    
+    
+    discharge_censor_dttm_by_28d = case_when(
+      #IF any of the following conditions:
+      #1. discharge_dttm is unavailable/NA for a patient
+      #2. max. available discharge_dttm is not within follow-up
+      #3. the discharge_category corresponding to the max. available discharge_dttm is an event is death or hospice
+      #4. for placed patients, the max. available discharge_dttm < time to placement (see trt_assignment_time code block)
+      #THEN: set discharge_censor_dttm_by_28d to NA
+      #ELSE: set discharge_censor_dttm_by_28d to terminal_discharge_dttm
+      is.na(terminal_discharge_dttm) | terminal_discharge_dttm < t_0 | terminal_discharge_dttm > end_date ~ as.POSIXct(NA),
+      terminal_discharge_category_clean %in% c("expired", "hospice") ~ as.POSIXct(NA),
+      treatment %in% c(0L, 1L) &
+        !is.na(time_to_assignment) &
+        terminal_discharge_dttm < time_to_assignment ~ as.POSIXct(NA),
+      TRUE ~ terminal_discharge_dttm
     )
   ) %>%
-  summarise(
-    discharge_censor_dttm_by_28d = if (any(!is.na(discharge_censor_dttm_by_28d))) {
-      #For most patients with a single hospitalization record during follow-up,
-      #the discharge_dttm from that hospitalization is selected.
-      #
-      #For patients with multiple hospitalizations spanning their stay (whose hospitalization ID could change before or at ICU/stepdown assignment), 
-      #any discharge before assignment is ignored, and the earliest eligible discharge after assignment is selected.
-      min(discharge_censor_dttm_by_28d, na.rm = TRUE)
-    } else {
-      as.POSIXct(NA)
-    },
-    .groups = "drop"
+  select(
+    patient_id,
+    hospital_block_id,
+    discharge_censor_dttm_by_28d
   )
 
 #Combine in-hospital mortality and hospice, and then join back
@@ -2522,7 +2532,7 @@ outcomes_chars <- outcomes_chars %>%
     
     #Final follow-up time among ICU/stepdown placed patients is the earliest of:
     #1. death or hospice discharge,
-    #2. alive discharge/censoring,
+    #2. alive discharge from hospital/censoring,
     #3. administrative censoring at day 28.
     discharge_death_hospice_dttm_by_28d = case_when(
       treatment %in% c(0L, 1L) ~ pmin(
@@ -2663,7 +2673,7 @@ assembled_df <- assembled_df %>%
   ) %>%
   mutate(
     #time to any event: if never placed, then it is time to discharge to ward, home, or t_0 + 24 hours (whichever occurs first)
-    #time to any event: if placed, then it is time to death, hospice, discharge from ICU/stepdown, or adminsitrative censoring 
+    #time to any event: if placed, then it is time to death, hospice, discharge from hospital, or adminsitrative censoring 
     time_to_event = case_when(
       is.na(treatment) ~ time_to_assignment,
       TRUE ~ discharge_death_hospice_dttm_by_28d
@@ -2759,7 +2769,7 @@ assembled_df <- assembled_df %>%
     #Outcome variables
     death_or_hospice_by_28d, #Time-varying outcome variable: among those with eventual ICU or Stepdown placement, 0 = event not yet observed during person-time-period, 1 = event observed. NA if no ICU or stepdown placement.
                              #Patient stop contributing to the risk set once this variable becomes 1 for those who experienced event.
-    discharge_death_hospice_dttm_by_28d, #Fixed dttm outcome variable for death, hospice, or lost to follow up (discharged from ICU/Stepdown), NA if no ICU or stepdown placement.
+    discharge_death_hospice_dttm_by_28d, #Fixed dttm outcome variable for death, hospice, or lost to follow up (discharged from hospital), NA if no ICU or stepdown placement.
     death_or_hospice_dttm_by_28d #Fixed dttm outcome variable for death or hospice,, NA if no ICU or stepdown placement.
   )
   
