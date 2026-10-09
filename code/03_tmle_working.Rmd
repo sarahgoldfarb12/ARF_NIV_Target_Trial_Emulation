@@ -1,0 +1,92 @@
+---
+title: "IMC_ICU_ARF_TargetTrialEmulation_TMLE"
+author: "Chad Hochberg, Lizi Shao, Sarah Goldfarb"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Install Packages}
+packages <- c(
+                  "lubridate", 
+                  "tidyverse", 
+                  "dplyr",
+                  "table1", 
+                  "broom", 
+                  "arrow", 
+                  "rvest", 
+                  "readr", 
+                  "fst", 
+                  "data.table", 
+                  "collapse", 
+                  "yaml",
+                  "rprojroot",
+                  "comorbidity")
+    
+    install_if_missing <- function(package) {
+      if (!require(package, character.only = TRUE)) {
+        install.packages(package, dependencies = TRUE)
+        library(package, character.only = TRUE)
+      }
+    }
+    
+    sapply(packages, install_if_missing)
+    rm(packages, install_if_missing)
+    
+```
+
+```{r Globally Defined Variables}
+MAX_TIME = 24*28 # Maximum Amount of Hours by 28 Days
+```
+
+
+
+```{r Read in Config}
+# Find project root
+project_root <- find_root(rprojroot::has_dir("config"))
+    
+    # Read YAML config
+config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+global_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
+    
+# Assign config values to R variables
+tables_location <- config$tables_location
+project_location <- config$project_location
+site <- config$institution
+site_time_zone <- config$time_zone
+file_type <- config$file_type
+```
+
+```{r Load in Data}
+filenames <- list.files(
+  paste0(project_location, "/private_tables/"),
+  pattern = "\\.csv$",
+  full.names = FALSE
+)
+
+raw_dfs <- list()
+
+for (filename in filenames) {
+  data <- read_csv(paste0(project_location, "/private_tables/", filename), show_col_types = FALSE)
+  
+  name_key <- tools::file_path_sans_ext(filename)
+  
+  raw_dfs[[name_key]] <- data
+}
+```
+
+```{r Format Assembled DF for Longitudinal G-Formula}
+tmle_df_build <- raw_dfs$assembled_df |>
+  mutate(
+    k=dplyr::row_number(), #define blocks as integers (k) For G-formula and TMLE Coding
+    #Define Discharge Alive for Competing Event
+    last_row = dplyr::row_number() == dplyr::n(),
+    discharge_alive_nohospice = as.integer(
+      last_row==T &
+      death_or_hospice_by_28d == 0 &
+      time_block < MAX_TIME),
+    .by = hospital_block_id
+  ) |>
+  relocate(k, .after=time_block)
+
+```
+

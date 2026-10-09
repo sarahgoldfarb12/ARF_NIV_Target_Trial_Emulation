@@ -2759,6 +2759,12 @@ assembled_df <- assembled_df %>%
     elixhauser_index,
     elixhauser_count,
     
+    #ICU Organ Support Datetimes
+    first_imv_dttm,
+    first_trach_dttm,
+    first_vasoactive_dttm=first_vasoactive_time,
+    first_crrt_dttm,
+  
     #Treatment variables
     treatment_indicator, #Fixed ICU vs. Stepdown indicator at the patient-level. NA if no ICU or stepdown placement.
     treatment_transition_path, #Fixed treatment transition path at the patient-level (e.g., from ED to Ward or ED to ICU), the number of NA should be 0.
