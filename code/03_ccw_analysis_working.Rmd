@@ -1,0 +1,242 @@
+---
+title: "IMC_ICU_ARF_TargetTrialEmulation_Analysis"
+author: "Chad Hochberg, Lizi Shao, Sarah Goldfarb"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Install Packages}
+packages <- c(
+                  "lubridate", 
+                  "tidyverse", 
+                  "dplyr",
+                  "table1", 
+                  "broom", 
+                  "arrow", 
+                  "rvest", 
+                  "readr", 
+                  "data.table", 
+                  "collapse", 
+                  "yaml",
+                  "this.path",
+                  "comorbidity",
+                  "WeightIt",
+                  "SuperLearner")
+    
+    install_if_missing <- function(package) {
+      if (!require(package, character.only = TRUE)) {
+        install.packages(package, dependencies = TRUE)
+        library(package, character.only = TRUE)
+      }
+    }
+    
+    sapply(packages, install_if_missing)
+    rm(packages, install_if_missing)
+    
+```
+
+```{r Globally Defined Variables}
+MAX_FU = 24*28 # Maximum Amount of Follow-up in Hours at 28 Days
+```
+
+
+
+```{r Read in Config}
+# Find project root
+project_root <- dirname(dirname(this.path()))
+    
+    # Read YAML config
+config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
+global_config <- yaml::read_yaml(file.path(project_root, "config", "global_config.yaml"))
+    
+# Assign config values to R variables
+tables_location <- config$tables_location
+project_location <- config$project_location
+site <- config$institution
+site_time_zone <- config$time_zone
+file_type <- config$file_type
+
+#Create Folders if They Do NOT already exist
+if (!dir.exists(paste0(project_location, "/", site, "_project_output/graphs"))) {
+      dir.create(paste0(project_location,"/", site, "_project_output/graphs"))
+}
+```
+
+```{r Load in Data}
+filenames <- list.files(
+  paste0(project_location, "/private_tables/"),
+  pattern = "\\.csv$",
+  full.names = FALSE
+)
+
+raw_dfs <- list()
+
+for (filename in filenames) {
+  data <- read_csv(paste0(project_location, "/private_tables/", filename), show_col_types = FALSE)
+  
+  name_key <- tools::file_path_sans_ext(filename)
+  
+  raw_dfs[[name_key]] <- data
+}
+```
+
+#Analytic Plan
+- Primary Approach: Clone Censor Weighting Using Super Learner to Calculate Censoring Weights Based on Pre Triage Trajectory
+- Weighted Pooled Logistic Outcome Regression Controlling for Baseline Variables
+- Secondary: Weighted TMLE outcome regression
+
+
+```{r Format Assembled DF for Clone Censor Weighting}
+censor_df <- as.data.table(raw_dfs$assembled_df) %>%
+  mutate(
+    out_of_ed = fifelse(unit_location != 'ed' & !is.na(unit_location), 1, 0L)
+  ) %>%
+  mutate(
+    is_first_non_ed = as.integer(row_number() == which(out_of_ed == 1)[1]),
+    first_triage_location = fifelse(is_first_non_ed==1, unit_location, NA_character_),
+    in_ed_at_24hours = fifelse(unit_location=='ed' & time_block>=24, 1L, 0L),
+    first_icu_indication=coalesce(first_imv_dttm, first_vasoactive_dttm, first_crrt_dttm),
+    .by = hospital_block_id
+  ) |>
+  fill(first_triage_location, in_ed_at_24hours, .direction=c('downup'), .by = hospital_block_id)
+
+clone0 <- copy(censor_df)[, icu_arm:=0]
+clone1 <- copy(censor_df)[, icu_arm:=1]
+
+# Check the number of clones in each arm
+temp0 <- length(clone0$time_block[which(clone0$time_block==2)])
+temp1 <- length(clone1$time_block[which(clone1$time_block==2)])
+
+n_events0 <- clone0 %>%
+  summarise(n_events = sum(death_or_hospice_by_28d == 1, na.rm = TRUE), 
+            .by = hospital_block_id)
+n_events1 <- clone1 %>%
+  summarise(n_events = sum(death_or_hospice_by_28d == 1, na.rm = TRUE), 
+            .by = hospital_block_id)
+
+
+#Keep Track of Clone Data for Diagnostics
+clone_diagnostics <- data.frame(
+  clone = c('clone0', 'clone1'),
+  description = c('Not ICU', 'ICU'),
+  n_clones_prior_censoring = c(temp0, temp1),
+  n_events_prior_censoring = c(sum(n_events0$n_events, na.rm=T), sum(n_events1$n_events, na.rm=T))
+)
+
+#Censor Clones When They Are No Longer Adherent to The Strategies of:
+#--clone0=imc by end of 24 hours OR if develops an ICU indication prior to triage censor
+clone0 <- clone0 |>
+  #Censor if in ICU before hour 24
+  mutate(
+    icu_indication_censor=fifelse(
+      out_of_ed==0L & first_icu_indication<=block_end, 1L, NA_real_
+    ),
+    temp=fifelse(icu_indication_censor==1L, time_block, NA_real_),
+    icu_indication_censor_block=ifelse(is.finite(min(temp, na.rm = TRUE)), min(temp, na.rm = TRUE), NA_real_),
+    first_censored=fcase(
+      time_block>=24 & in_ed_at_24hours==1, 1L,
+      (icu_arm==0 & first_triage_location!='stepdown' & is_first_non_ed==1), 1L,
+      default = 0L),
+    censored_reason=fcase(
+      first_censored==1L & in_ed_at_24hours==1, 'Still in ED at 24 Hours',
+      first_censored==1L & out_of_ed==1 & first_triage_location=='icu', 'To ICU',
+      first_censored==1L & out_of_ed==1 & first_triage_location=='ward', 'To Ward'),
+    censored=cummax(first_censored), 
+    temp_censor=cumsum(censored),
+ 
+    .by = hospital_block_id
+  ) |>
+  filter(
+    temp_censor<=1, 
+    .by = hospital_block_id
+  ) |>
+  select(-temp_censor, -temp)
+  
+#--clone1=icu by end of 24 hours OR if develops an ICU indication prior to triage censor
+clone1 <- clone1 |>
+  #Censor if in stepdown before hour 24
+  mutate(
+    icu_indication_censor=fifelse(
+    out_of_ed==0L & first_icu_indication<=block_end, 1L, NA_real_),
+    temp=fifelse(icu_indication_censor==1L, time_block, NA_real_),
+    icu_indication_censor_block=ifelse(is.finite(min(temp, na.rm = TRUE)), min(temp, na.rm = TRUE), NA_real_),
+    first_censored=fcase(
+      time_block>=24 & in_ed_at_24hours==1, 1L,
+      (icu_arm==1 & first_triage_location!='icu' & is_first_non_ed==1), 1L,
+      default = 0L),
+    censored_reason=fcase(
+      first_censored==1L & in_ed_at_24hours==1, 'Still in ED at 24 Hours',
+      first_censored==1L & out_of_ed==1 & first_triage_location=='stepdown', 'To IMC',
+      first_censored==1L & out_of_ed==1 & first_triage_location=='ward', 'To Ward'),
+    censored=cummax(first_censored), 
+    temp_censor=cumsum(censored),
+    .by = hospital_block_id
+  ) |>
+ filter(
+    temp_censor<=1, 
+    .by = hospital_block_id
+  ) |>
+  select(-temp_censor, -temp)
+
+both.arms <- rbind(clone0,clone1)
+```
+
+```{r Plot Censoring}
+both.arms.new.cens <- both.arms[which(both.arms$censored==1)]
+both.arms.no.cens <- both.arms
+both.arms.no.cens$censored <- 0
+both.arms.plot <- rbind(both.arms.no.cens, both.arms.new.cens)
+table(both.arms.plot$censored)
+
+# Create a new variable which indicates an individual's status on week k
+both.arms.plot <- both.arms.plot |>
+  mutate(status=fifelse(
+    is.na(censored_reason) & censored==0L, 'Following Assigned Strategy', censored_reason
+  ))
+table(both.arms.plot$status, useNA="always")
+
+# Prep data for plotting
+plot.counts <- both.arms.plot %>% group_by(time_block, status, icu_arm) %>%
+  dplyr::summarize(total_count=n(),
+            .groups = 'drop')
+plot.counts$arm_name <- ifelse(plot.counts$icu_arm==0, "Triage to IMC", "Triage to ICU")
+
+# Create plot
+cens_plot <- ggplot(data=plot.counts %>% filter(time_block<=24), aes(x=time_block, y=total_count, fill = as.factor(status))) +
+  geom_bar(position="stack", stat="identity") +
+  xlab("Hours from Time Zero") + 
+  scale_x_continuous(breaks=c(0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24)) +
+  ylab("Number of individuals") + 
+  scale_y_continuous(breaks=c(0, 2000, 4000, 6000, 8000, 10000, 12000)) + 
+  scale_fill_manual(values = c("#878787", "#14B5D0", "#E8A33D", "#800000", "black")) + # set colors
+  theme_minimal() +
+  theme(axis.text = element_text(size=10), 
+        legend.position = "bottom",
+        axis.line = element_line(colour = "black"),
+        legend.title = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank())+
+  facet_wrap(~arm_name, scales = "free")
+cens_plot
+
+ggsave(
+  filename=paste0(site,'_clone_censoring_counts.pdf'),
+  plot=last_plot(),
+  device=cairo_pdf,
+  width = 8,
+  height = 5,
+  units ='in',
+  path = paste0(project_location, site, '_project_output/graphs/'))
+ggsave(
+  filename=paste0(site, '_clone_censoring_counts.svg'),
+  plot=last_plot(),
+  device=cairo_ps,
+  width = 8,
+  height = 5,
+  units ='in',
+  path = paste0(project_location, site, '_project_output/graphs/'))
+
+```
+

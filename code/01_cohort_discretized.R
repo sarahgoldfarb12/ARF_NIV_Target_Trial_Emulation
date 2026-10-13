@@ -281,7 +281,12 @@ baseline_chars <- final_cohort |>
     patient_id, #Saved in final cohort
     hospital_block_id, #final_cohort
     niv_start, #final_cohort
-    t_0 #final_cohort
+    t_0, #final_cohort,
+    first_imv_dttm,
+    first_trach_dttm,
+    first_vasoactive_dttm=first_vasoactive_time,
+    first_crrt_dttm
+    
   ) %>% 
   mutate(year = as.integer(year(niv_start))) %>% 
   
@@ -2656,7 +2661,11 @@ assembled_df <- assembled_df %>%
         patient_id,
         hospital_block_id,
         treatment,
-        treatment_transition_path) %>% 
+        treatment_transition_path,
+        first_imv_dttm, 
+        first_trach_dttm,
+        first_vasoactive_dttm, 
+        first_crrt_dttm) %>% 
       distinct(), 
     by = c("patient_id", "hospital_block_id")
   ) %>% 
@@ -2762,7 +2771,7 @@ assembled_df <- assembled_df %>%
     #ICU Organ Support Datetimes
     first_imv_dttm,
     first_trach_dttm,
-    first_vasoactive_dttm=first_vasoactive_time,
+    first_vasoactive_dttm,
     first_crrt_dttm,
   
     #Treatment variables
