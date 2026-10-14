@@ -89,16 +89,32 @@ for (filename in filenames) {
 ```{r Format Assembled DF for Clone Censor Weighting}
 censor_df <- as.data.table(raw_dfs$assembled_df) %>%
   mutate(
-    out_of_ed = fifelse(unit_location != 'ed' & !is.na(unit_location), 1, 0L)
-  ) %>%
-  mutate(
+    out_of_ed = fifelse(unit_location != 'ed' & !is.na(unit_location), 1, 0L),
     is_first_non_ed = as.integer(row_number() == which(out_of_ed == 1)[1]),
     first_triage_location = fifelse(is_first_non_ed==1, unit_location, NA_character_),
     in_ed_at_24hours = fifelse(unit_location=='ed' & time_block>=24, 1L, 0L),
-    first_icu_indication=coalesce(first_imv_dttm, first_vasoactive_dttm, first_crrt_dttm),
+    first_icu_indication=coalesce(first_imv_dttm, first_vasoactive_dttm), #For Purposes of this Analysis Assume This is Just Vasopressors and IMV
+    #Identify Patients That Develop an ICU Indication While Still in ED (IMV, Vasopressors)
+    icu_indication_censor=fifelse(
+      out_of_ed==0L & first_icu_indication<=block_end, 1L, NA_real_
+    ),
+    temp=fifelse(icu_indication_censor==1L, time_block, NA_real_),
+    icu_indication_censor_block=ifelse(is.finite(min(temp, na.rm = TRUE)), min(temp, na.rm = TRUE), NA_real_),
+    icu_indication_in_ed=fifelse(!is.na(icu_indication_censor_block), 1L, 0L),
     .by = hospital_block_id
   ) |>
-  fill(first_triage_location, in_ed_at_24hours, .direction=c('downup'), .by = hospital_block_id)
+  fill(first_triage_location, in_ed_at_24hours, icu_indication_in_ed, .direction=c('downup'), .by = hospital_block_id) |>
+  mutate(
+    #Possible Outcomes from ED: Still in ED at Hour 24, In ICU at end Hour 24, In IMC at Hour 24, Developed an ICU indication in ED, Died in ED
+    triage_outcomes=fcase(
+      in_ed_at_24hours==1, 'In ED at 24 Hours',
+      icu_indication_in_ed==1, 'ICU indication in ED',
+      in_ed_at_24hours==0 & first_triage_location=='icu', 'In ICU at 24 Hours',
+      in_ed_at_24hours==0 & first_triage_location=='stepdown', 'In IMC at 24 Hours',
+      .by = hospital_block_id
+    )) |>
+  fill(first_triage_location, in_ed_at_24hours, .direction=c('downup'), .by = hospital_block_id) |>
+  select(-temp)
 
 clone0 <- copy(censor_df)[, icu_arm:=0]
 clone1 <- copy(censor_df)[, icu_arm:=1]
@@ -128,11 +144,6 @@ clone_diagnostics <- data.frame(
 clone0 <- clone0 |>
   #Censor if in ICU before hour 24
   mutate(
-    icu_indication_censor=fifelse(
-      out_of_ed==0L & first_icu_indication<=block_end, 1L, NA_real_
-    ),
-    temp=fifelse(icu_indication_censor==1L, time_block, NA_real_),
-    icu_indication_censor_block=ifelse(is.finite(min(temp, na.rm = TRUE)), min(temp, na.rm = TRUE), NA_real_),
     first_censored=fcase(
       time_block>=24 & in_ed_at_24hours==1, 1L,
       (icu_arm==0 & first_triage_location!='stepdown' & is_first_non_ed==1), 1L,
@@ -238,5 +249,25 @@ ggsave(
   units ='in',
   path = paste0(project_location, site, '_project_output/graphs/'))
 
+
+#Generate Table and Plot for General Triage Outcomes
+triage_plot <- ggplot(data=censor_df %>% filter(time_block<=24), aes(x=time_block, y=total_count, fill = as.factor(status))) +
+  geom_bar(position="stack", stat="identity") +
+  xlab("Hours from Time Zero") + 
+  scale_x_continuous(breaks=c(0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24)) +
+  ylab("Number of individuals") + 
+  scale_y_continuous(breaks=c(0, 2000, 4000, 6000, 8000, 10000, 12000)) + 
+  scale_fill_manual(values = c("#878787", "#14B5D0", "#E8A33D", "#800000", "black")) + # set colors
+  theme_minimal() +
+  theme(axis.text = element_text(size=10), 
+        legend.position = "bottom",
+        axis.line = element_line(colour = "black"),
+        legend.title = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank())+
+  facet_wrap(~arm_name, scales = "free")
+cens_plot
 ```
 
