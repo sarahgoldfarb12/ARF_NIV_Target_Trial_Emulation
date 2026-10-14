@@ -300,3 +300,22 @@ ggsave(
   path = paste0(project_location, site, '_project_output/graphs/'))
 ```
 
+```{r Lagged Variables for the Covariate History Model}
+#Stabilized Censoring Weights: These are Censoring of Clones that Deviate from Their Assigned Strategy
+analytic_df <- censor_df |>
+  #Create Lagged Versions of Variables - FOR LIZI (for variables in c()), please create lag1 and lag2 versions that are the value from the prior and 2 hour block previously
+  #Variables for Lagging are c('','','','','','','','','','','','','','','','')
+  
+
+
+
+```
+
+```{r Calculation of Non-Eligible Weights for Those that Develop ICU Indication in the ED}
+
+```
+
+```{r Calculation of Non-Eligible Weights for Those that Remain in ED}
+
+```
+
