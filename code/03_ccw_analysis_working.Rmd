@@ -10,7 +10,7 @@ packages <- c(
                   "lubridate", 
                   "tidyverse", 
                   "dplyr",
-                  "table1", 
+                  "tableone", 
                   "broom", 
                   "arrow", 
                   "rvest", 
@@ -87,13 +87,19 @@ for (filename in filenames) {
 
 
 ```{r Format Assembled DF for Clone Censor Weighting}
+final_cohort <- as.data.table(raw_dfs$no_pandemic_one_encounter_per_patient)
+
 censor_df <- as.data.table(raw_dfs$assembled_df) %>%
+  #Bring in Needed Data from Final Cohort 
+  left_join(
+    final_cohort %>% select(-c(patient_id, first_trach_dttm, t_0, first_imv_dttm, first_vasoactive_time, first_vasoactive_name, first_vasoactive_dose,
+                               first_vasoactive_unit, first_crrt_mode, first_crrt_dttm))
+  ) |>
   mutate(
     out_of_ed = fifelse(unit_location != 'ed' & !is.na(unit_location), 1, 0L),
     is_first_non_ed = as.integer(dplyr::row_number() == which(out_of_ed == 1)[1]),
     last_block_was_ed = fifelse(
       last(unit_location[!is.na(unit_location)]) == "ed", 1L, NA_real_),
-    first_triage_location = fifelse(is_first_non_ed==1, unit_location, NA_character_),
     in_ed_at_24hours = fifelse(unit_location=='ed' & time_block>=24, 1L, 0L),
     first_icu_indication=coalesce(first_imv_dttm, first_vasoactive_dttm), #For Purposes of this Analysis Assume This is Just Vasopressors and IMV
     #Identify Patients That Develop an ICU Indication While Still in ED (IMV, Vasopressors)
@@ -105,16 +111,16 @@ censor_df <- as.data.table(raw_dfs$assembled_df) %>%
     icu_indication_in_ed=fifelse(!is.na(icu_indication_censor_block), 1L, 0L),
     .by = hospital_block_id
   ) |>
-  fill(first_triage_location, in_ed_at_24hours, icu_indication_in_ed, last_block_was_ed, .direction=c('downup'), .by = hospital_block_id) |>
+  fill(triage_location, in_ed_at_24hours, icu_indication_in_ed, last_block_was_ed, .direction=c('downup'), .by = hospital_block_id) |>
   mutate(
     #Possible Outcomes from ED: Still in ED at Hour 24, In ICU at end Hour 24, In IMC at Hour 24, Developed an ICU indication in ED, Died in ED
     triage_outcome=fcase(
       in_ed_at_24hours==1, 'In ED at 24 Hours',
       icu_indication_in_ed==1, 'ICU indication in ED',
       last_block_was_ed==1 & max(time_block)<24, 'Left ED/Hospital Within 24 Hours',
-      in_ed_at_24hours==0 & first_triage_location=='icu', 'In ICU at 24 Hours',
-      in_ed_at_24hours==0 & first_triage_location=='stepdown', 'In IMC at 24 Hours',
-      in_ed_at_24hours==0 & first_triage_location=='ward', 'In Ward at 24 Hours'),
+      in_ed_at_24hours==0 & triage_location=='icu', 'In ICU at 24 Hours',
+      in_ed_at_24hours==0 & triage_location=='stepdown', 'In IMC at 24 Hours',
+      in_ed_at_24hours==0 & triage_location=='ward', 'In Ward at 24 Hours'),
     #Identify Which Block This Outcome Occurred In
     triage_block=fcase(
       in_ed_at_24hours==1 & icu_indication_in_ed==0, 24,
@@ -122,8 +128,8 @@ censor_df <- as.data.table(raw_dfs$assembled_df) %>%
       is_first_non_ed==1, time_block),
       .by = hospital_block_id
     ) |>
-  fill(first_triage_location, in_ed_at_24hours, triage_outcome, triage_block, .direction=c('downup'), .by = hospital_block_id) |>
-  select(-temp)
+  fill(triage_location, in_ed_at_24hours, triage_outcome, triage_block, .direction=c('downup'), .by = hospital_block_id) |>
+  select(-temp) 
 
 clone0 <- copy(censor_df)[, icu_arm:=0]
 clone1 <- copy(censor_df)[, icu_arm:=1]
@@ -155,12 +161,12 @@ clone0 <- clone0 |>
   mutate(
     first_censored=fcase(
       time_block>=24 & in_ed_at_24hours==1, 1L,
-      (icu_arm==0 & first_triage_location!='stepdown' & is_first_non_ed==1), 1L,
+      (icu_arm==0 & triage_location!='stepdown' & is_first_non_ed==1), 1L,
       default = 0L),
     censored_reason=fcase(
       first_censored==1L & in_ed_at_24hours==1, 'Still in ED at 24 Hours',
-      first_censored==1L & out_of_ed==1 & first_triage_location=='icu', 'To ICU',
-      first_censored==1L & out_of_ed==1 & first_triage_location=='ward', 'To Ward'),
+      first_censored==1L & out_of_ed==1 & triage_location=='icu', 'To ICU',
+      first_censored==1L & out_of_ed==1 & triage_location=='ward', 'To Ward'),
     censored=cummax(first_censored), 
     temp_censor=cumsum(censored),
  
@@ -178,12 +184,12 @@ clone1 <- clone1 |>
   mutate(
     first_censored=fcase(
       time_block>=24 & in_ed_at_24hours==1, 1L,
-      (icu_arm==1 & first_triage_location!='icu' & is_first_non_ed==1), 1L,
+      (icu_arm==1 & triage_location!='icu' & is_first_non_ed==1), 1L,
       default = 0L),
     censored_reason=fcase(
       first_censored==1L & in_ed_at_24hours==1, 'Still in ED at 24 Hours',
-      first_censored==1L & out_of_ed==1 & first_triage_location=='stepdown', 'To IMC',
-      first_censored==1L & out_of_ed==1 & first_triage_location=='ward', 'To Ward'),
+      first_censored==1L & out_of_ed==1 & triage_location=='stepdown', 'To IMC',
+      first_censored==1L & out_of_ed==1 & triage_location=='ward', 'To Ward'),
     censored=cummax(first_censored), 
     temp_censor=cumsum(censored),
     .by = hospital_block_id
@@ -308,15 +314,27 @@ ggsave(
 #Create Table for Triage Outcomes (this will define study population)
 to_tab <- c(
   'age',
+  'first_hospital_id',
+  #'triage_location_raw',
+  'first_niv_device',
+  'code_status_t0',
+  'triage_block',
+  'year',
+  'discharge_category',
+  'ed_hours'
+)
+factor_vars <- c(
+  'first_hospital_id',
+  #'triage_location_raw',
+  'first_niv_device',
+  'code_status_t0',
   'triage_block',
   'year',
   'discharge_category'
 )
-
-factor_vars <- c(
-  'year',
-  'triage_block',
-  'discharge_category'
+nonnorm <- c(
+  'age',
+  'ed_hours'
 )
 
 #Data to Enter are 1 Row Per Patient
@@ -324,8 +342,25 @@ tab_dat <- censor_df |>
   filter(dplyr::row_number()==1, .by=hospital_block_id)
 
 tab_triage <- CreateTableOne(vars=to_tab, factorVars = factor_vars, data=tab_dat, strata = 'triage_outcome', addOverall=T)
-tab_excel <- print(tab_triage, printToggle = FALSE)
+tab_excel <- print(tab_triage, printToggle = FALSE, nonormal=nonnorm)
 write.csv(tab_excel, file=paste0(project_location, '/', site, '_project_output/triage_outcome_table.csv'))
+
+#Triage Locations (Actual Names)
+to_tab <- c(
+  'triage_location_raw'
+)
+factor_vars <- c(
+  'triage_location_raw'
+)
+
+
+#Data to Enter are 1 Row Per Patient
+tab_dat <- censor_df |>
+  filter(dplyr::row_number()==1, .by=hospital_block_id)
+
+tab_triage <- CreateTableOne(vars=to_tab, factorVars = factor_vars, data=tab_dat, strata = 'triage_outcome', addOverall=T)
+tab_excel <- print(tab_triage, printToggle = FALSE, nonormal=nonnorm)
+write.csv(tab_excel, file=paste0(project_location, '/', site, '_project_output/triage_locations_raw_table.csv'))
 ```
 
 ```{r Lagged Variables for the Covariate History Model}
