@@ -111,14 +111,15 @@ censor_df <- as.data.table(raw_dfs$assembled_df) %>%
       icu_indication_in_ed==1, 'ICU indication in ED',
       in_ed_at_24hours==0 & first_triage_location=='icu', 'In ICU at 24 Hours',
       in_ed_at_24hours==0 & first_triage_location=='stepdown', 'In IMC at 24 Hours',
+      in_ed_at_24hours==0 & first_triage_location=='ward', 'In Ward at 24 Hours'),
     #Identify Which Block This Outcome Occurred In
     triage_block=fcase(
       in_ed_at_24hours==1 & icu_indication_in_ed==0, 24,
       icu_indication_in_ed==1, icu_indication_censor_block,
       is_first_non_ed==1, time_block),
       .by = hospital_block_id
-    )) |>
-  fill(first_triage_location, in_ed_at_24hours, .direction=c('downup'), .by = hospital_block_id) |>
+    ) |>
+  fill(first_triage_location, in_ed_at_24hours, triage_outcome, .direction=c('downup'), .by = hospital_block_id) |>
   select(-temp)
 
 clone0 <- copy(censor_df)[, icu_arm:=0]
@@ -166,7 +167,7 @@ clone0 <- clone0 |>
     temp_censor<=1, 
     .by = hospital_block_id
   ) |>
-  select(-temp_censor, -temp)
+  select(-temp_censor)
   
 #--clone1=icu by end of 24 hours OR if develops an ICU indication prior to triage censor
 clone1 <- clone1 |>
