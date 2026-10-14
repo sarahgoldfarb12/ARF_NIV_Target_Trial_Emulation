@@ -91,6 +91,8 @@ censor_df <- as.data.table(raw_dfs$assembled_df) %>%
   mutate(
     out_of_ed = fifelse(unit_location != 'ed' & !is.na(unit_location), 1, 0L),
     is_first_non_ed = as.integer(dplyr::row_number() == which(out_of_ed == 1)[1]),
+    last_block_was_ed = fifelse(
+      last(unit_location[!is.na(unit_location)]) == "ed", 1L, NA_real_),
     first_triage_location = fifelse(is_first_non_ed==1, unit_location, NA_character_),
     in_ed_at_24hours = fifelse(unit_location=='ed' & time_block>=24, 1L, 0L),
     first_icu_indication=coalesce(first_imv_dttm, first_vasoactive_dttm), #For Purposes of this Analysis Assume This is Just Vasopressors and IMV
@@ -103,12 +105,13 @@ censor_df <- as.data.table(raw_dfs$assembled_df) %>%
     icu_indication_in_ed=fifelse(!is.na(icu_indication_censor_block), 1L, 0L),
     .by = hospital_block_id
   ) |>
-  fill(first_triage_location, in_ed_at_24hours, icu_indication_in_ed, .direction=c('downup'), .by = hospital_block_id) |>
+  fill(first_triage_location, in_ed_at_24hours, icu_indication_in_ed, last_block_was_ed, .direction=c('downup'), .by = hospital_block_id) |>
   mutate(
     #Possible Outcomes from ED: Still in ED at Hour 24, In ICU at end Hour 24, In IMC at Hour 24, Developed an ICU indication in ED, Died in ED
     triage_outcome=fcase(
       in_ed_at_24hours==1, 'In ED at 24 Hours',
       icu_indication_in_ed==1, 'ICU indication in ED',
+      last_block_was_ed==1 & max(time_block)<24, 'Left ED/Hospital Within 24 Hours',
       in_ed_at_24hours==0 & first_triage_location=='icu', 'In ICU at 24 Hours',
       in_ed_at_24hours==0 & first_triage_location=='stepdown', 'In IMC at 24 Hours',
       in_ed_at_24hours==0 & first_triage_location=='ward', 'In Ward at 24 Hours'),
@@ -258,7 +261,9 @@ triage_outcome_df <- censor_df |>
   mutate(
     block_status=fcase(
       triage_block==time_block, triage_outcome,
-      time_block<triage_block, 'In ED Awaiting Triage Outcome')) |>
+      time_block<triage_block, 'In ED Awaiting Triage Outcome',
+      time_block=max(time_block) & triage_outcome=='Left ED/Hospital Within 24 Hours', triage_outcome),
+    .by=hospital_block_id) |>
   filter(time_block<=triage_block | is.na(triage_block))
 
 triage_outcome_plot <- triage_outcome_df |>
@@ -266,13 +271,13 @@ triage_outcome_plot <- triage_outcome_df |>
   dplyr::summarize(total_count=n(),
             .groups = 'drop')
 
-triage_plot <- ggplot(data=triage_outcome_plot %>% filter(time_block<=24), aes(x=time_block, y=total_count, fill = as.factor(block_status))) +
+triage_plot <- ggplot(data=triage_outcome_plot %>% filter(time_block<=24), aes(x=time_block, y=total_count, fill =   as.factor(block_status))) +
   geom_bar(position="stack", stat="identity") +
   xlab("Hours from Time Zero") + 
   scale_x_continuous(breaks=c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24)) +
   ylab("Number of individuals") + 
-  scale_y_continuous(breaks=c(0, 2000, 4000, 6000, 8000, 10000, 12000)) + 
-  scale_fill_manual(values = c("#878787", "#14B5D0", "#E8A33D", "#800000", "black")) + # set colors
+  scale_y_continuous(breaks=seq(0, 4000, by=500)) + 
+  scale_fill_viridis_d() + # set colors
   theme_minimal() +
   theme(axis.text = element_text(size=10), 
         legend.position = "bottom",
@@ -299,6 +304,28 @@ ggsave(
   height = 5,
   units ='in',
   path = paste0(project_location, site, '_project_output/graphs/'))
+
+#Create Table for Triage Outcomes (this will define study population)
+to_tab <- c(
+  'age',
+  'triage_block',
+  'year',
+  'discharge_category'
+)
+
+factor_vars <- c(
+  'year',
+  'triage_block',
+  'discharge_category'
+)
+
+#Data to Enter are 1 Row Per Patient
+tab_dat <- censor_df |>
+  filter(dplyr::row_number()==1, .by=hospital_block_id)
+
+tab_triage <- CreateTableOne(vars=to_tab, factorVars = factor_vars, data=tab_dat, strata = 'triage_outcome', addOverall=T)
+tab_excel <- print(tab_triage, printToggle = FALSE)
+write.csv(tab_excel, file=paste0(project_location, '/', site, '_project_output/triage_outcome_table.csv'))
 ```
 
 ```{r Lagged Variables for the Covariate History Model}
@@ -312,11 +339,29 @@ analytic_df <- censor_df |>
 
 ```
 
+
+```{r Calculate Censoring Weights - 1st Parametrically}
+
+```
+
+
+```{r Calculate Censoring Weights - Using SuperLearner Ensemble Method}
+
+```
+
+
 ```{r Calculation of Non-Eligible Weights for Those that Develop ICU Indication in the ED}
+
+
 
 ```
 
 ```{r Calculation of Non-Eligible Weights for Those that Remain in ED}
+
+```
+
+```{r Calculate the Weights to be Used in the Outcome Model}
+#These are the cumulative product of inverse probability of censoring weights and weights for those that are removed because they are ineligible 
 
 ```
 
