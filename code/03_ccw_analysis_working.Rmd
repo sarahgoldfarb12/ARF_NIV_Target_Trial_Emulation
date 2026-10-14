@@ -119,7 +119,7 @@ censor_df <- as.data.table(raw_dfs$assembled_df) %>%
       is_first_non_ed==1, time_block),
       .by = hospital_block_id
     ) |>
-  fill(first_triage_location, in_ed_at_24hours, triage_outcome, .direction=c('downup'), .by = hospital_block_id) |>
+  fill(first_triage_location, in_ed_at_24hours, triage_outcome, triage_block, .direction=c('downup'), .by = hospital_block_id) |>
   select(-temp)
 
 clone0 <- copy(censor_df)[, icu_arm:=0]
@@ -189,7 +189,7 @@ clone1 <- clone1 |>
     temp_censor<=1, 
     .by = hospital_block_id
   ) |>
-  select(-temp_censor, -temp)
+  select(-temp_censor)
 
 both.arms <- rbind(clone0,clone1)
 ```
@@ -258,7 +258,8 @@ triage_outcome_df <- censor_df |>
   mutate(
     block_status=fcase(
       triage_block==time_block, triage_outcome,
-      time_block<=24, 'In ED Awaiting Triage Outcome'))
+      time_block<triage_block, 'In ED Awaiting Triage Outcome')) |>
+  filter(time_block<=triage_block | is.na(triage_block))
 
 triage_outcome_plot <- triage_outcome_df |>
   group_by(time_block, block_status) |>
