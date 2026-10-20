@@ -281,7 +281,12 @@ baseline_chars <- final_cohort |>
     patient_id, #Saved in final cohort
     hospital_block_id, #final_cohort
     niv_start, #final_cohort
-    t_0 #final_cohort
+    t_0, #final_cohort,
+    first_imv_dttm,
+    first_trach_dttm,
+    first_vasoactive_dttm=first_vasoactive_time,
+    first_crrt_dttm
+    
   ) %>% 
   mutate(year = as.integer(year(niv_start))) %>% 
   
@@ -441,7 +446,7 @@ vary_chars <- baseline_chars %>%
 ##Join with hospitalization id
 vary_chars <- vary_chars %>% 
   left_join(clif_hospitalization %>% 
-              select(patient_id, hospitalization_id, discharge_dttm, admission_dttm) %>% 
+              select(patient_id, hospitalization_id, discharge_dttm, discharge_category, admission_dttm) %>% 
               collect() %>% 
               mutate(#
                 hospitalization_id = as.character(hospitalization_id),
@@ -457,7 +462,7 @@ vary_chars <- vary_chars %>%
   arrange(desc(admission_dttm), .by_group = TRUE) %>% 
   slice(1) %>%
   ungroup() %>% 
-  select(-discharge_dttm, -discharge_dttm_join, -admission_dttm) %>% 
+  select(-discharge_dttm_join, -admission_dttm) %>% 
   #Some patients leave the ER before t+24, making their hospitalization_id NA for the corresponding time blocks. 
   group_by(patient_id) %>% 
   arrange(time_block, .by_group = TRUE) %>% 
@@ -2423,6 +2428,8 @@ discharge_censor <- outcomes_chars %>%
   select(
     patient_id,
     hospital_block_id,
+    discharge_dttm=terminal_discharge_dttm,
+    discharge_category=terminal_discharge_category_clean,
     discharge_censor_dttm_by_28d
   )
 
@@ -2656,7 +2663,11 @@ assembled_df <- assembled_df %>%
         patient_id,
         hospital_block_id,
         treatment,
-        treatment_transition_path) %>% 
+        treatment_transition_path,
+        first_imv_dttm, 
+        first_trach_dttm,
+        first_vasoactive_dttm, 
+        first_crrt_dttm) %>% 
       distinct(), 
     by = c("patient_id", "hospital_block_id")
   ) %>% 
@@ -2750,6 +2761,8 @@ assembled_df <- assembled_df %>%
     #Baseline variables
     year,
     admission_dttm,
+    discharge_dttm,
+    discharge_category,
     age,
    
     pulmonary_vasc,
@@ -2759,6 +2772,12 @@ assembled_df <- assembled_df %>%
     elixhauser_index,
     elixhauser_count,
     
+    #ICU Organ Support Datetimes
+    first_imv_dttm,
+    first_trach_dttm,
+    first_vasoactive_dttm,
+    first_crrt_dttm,
+  
     #Treatment variables
     treatment_indicator, #Fixed ICU vs. Stepdown indicator at the patient-level. NA if no ICU or stepdown placement.
     treatment_transition_path, #Fixed treatment transition path at the patient-level (e.g., from ED to Ward or ED to ICU), the number of NA should be 0.

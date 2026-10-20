@@ -1,0 +1,13 @@
+# Add local paath to CLIF tables
+tables_location: "/projects/CLIF-analysis/critill_rclif_2_1/critill_rclif_2_1_tables"
+
+# Add local path to project output location
+project_location: "/projects/CLIF-analysis/ARF_NIV_Target_Trial_Emulation/"
+
+# Add your institution name
+institution: "Hopkins"
+# Add your local time zone
+# Options are: EST = 'America/New_York', CST = 'America/Chicago', PST = 'America/Los_Angeles'
+time_zone: "America/New_York"
+
+file_type: "parquet"
