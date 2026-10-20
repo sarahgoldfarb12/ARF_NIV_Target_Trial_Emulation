@@ -2751,7 +2751,7 @@ assembled_df <- assembled_df %>%
     year,
     admission_dttm,
     age,
-    albumin_baseline,
+   
     pulmonary_vasc,
     renal_failure,
     liver_disease,
