@@ -1363,11 +1363,24 @@ vary_chars <- vary_chars %>%
                    "hospital_block_id")) %>%
   group_by(patient_id, hospital_block_id) %>%
   arrange(time_block, .by_group = TRUE) %>%
-  mutate(sofa_brain = if_else(
-    is.na(sofa_brain) & cumsum(!is.na(sofa_brain)) == 0,
-    sofa_brain_t0,
-    sofa_brain
-  )) %>%
+  mutate(
+    # Restore actual missing values before attempting the baseline fill.
+    sofa_brain = na_if(sofa_brain, "not measured"),
+    
+    # Keep existing baseline-fill rule.
+    sofa_brain = if_else(
+      is.na(sofa_brain) & cumsum(!is.na(sofa_brain)) == 0,
+      sofa_brain_t0,
+      sofa_brain
+    ),
+    
+    # Label only histories still entirely missing after the fill.
+    sofa_brain = if_else(
+      rep(all(is.na(sofa_brain)), n()),
+      "not measured",
+      sofa_brain
+    )
+  ) %>%
   ungroup() %>%
   select(-sofa_brain_t0)
 
@@ -1471,11 +1484,21 @@ vary_chars <- vary_chars %>%
                    "hospital_block_id")) %>%
   group_by(patient_id, hospital_block_id) %>%
   arrange(time_block, .by_group = TRUE) %>%
-  mutate(sofa_liver = if_else(
-    is.na(sofa_liver) & cumsum(!is.na(sofa_liver)) == 0,
-    sofa_liver_t0,
-    sofa_liver
-  )) %>%
+  mutate(
+    sofa_liver = na_if(sofa_liver, "not measured"),
+    
+    sofa_liver = if_else(
+      is.na(sofa_liver) & cumsum(!is.na(sofa_liver)) == 0,
+      sofa_liver_t0,
+      sofa_liver
+    ),
+    
+    sofa_liver = if_else(
+      rep(all(is.na(sofa_liver)), n()),
+      "not measured",
+      sofa_liver
+    )
+  ) %>%
   ungroup() %>%
   select(-sofa_liver_t0)
 
@@ -1579,11 +1602,21 @@ vary_chars <- vary_chars %>%
                    "hospital_block_id")) %>%
   group_by(patient_id, hospital_block_id) %>%
   arrange(time_block, .by_group = TRUE) %>%
-  mutate(sofa_coagulation = if_else(
-    is.na(sofa_coagulation) & cumsum(!is.na(sofa_coagulation)) == 0,
-    sofa_coagulation_t0,
-    sofa_coagulation
-  )) %>%
+  mutate(
+    sofa_coagulation = na_if(sofa_coagulation, "not measured"),
+    
+    sofa_coagulation = if_else(
+      is.na(sofa_coagulation) & cumsum(!is.na(sofa_coagulation)) == 0,
+      sofa_coagulation_t0,
+      sofa_coagulation
+    ),
+    
+    sofa_coagulation = if_else(
+      rep(all(is.na(sofa_coagulation)), n()),
+      "not measured",
+      sofa_coagulation
+    )
+  ) %>%
   ungroup() %>%
   select(-sofa_coagulation_t0)
 
@@ -1687,11 +1720,21 @@ vary_chars <- vary_chars %>%
                    "hospital_block_id")) %>%
   group_by(patient_id, hospital_block_id) %>%
   arrange(time_block, .by_group = TRUE) %>%
-  mutate(sofa_kidney = if_else(
-    is.na(sofa_kidney) & cumsum(!is.na(sofa_kidney)) == 0,
-    sofa_kidney_t0,
-    sofa_kidney
-  )) %>%
+  mutate(
+    sofa_kidney = na_if(sofa_kidney, "not measured"),
+    
+    sofa_kidney = if_else(
+      is.na(sofa_kidney) & cumsum(!is.na(sofa_kidney)) == 0,
+      sofa_kidney_t0,
+      sofa_kidney
+    ),
+    
+    sofa_kidney = if_else(
+      rep(all(is.na(sofa_kidney)), n()),
+      "not measured",
+      sofa_kidney
+    )
+  ) %>%
   ungroup() %>%
   select(-sofa_kidney_t0)
 
@@ -1861,11 +1904,21 @@ vary_chars <- vary_chars %>%
             by = c("patient_id", "hospital_block_id")) %>%
   group_by(patient_id, hospital_block_id) %>%
   arrange(time_block, .by_group = TRUE) %>%
-  mutate(avg_ph = if_else(
-    is.na(avg_ph) & cumsum(!is.na(avg_ph)) == 0,
-    as.character(avg_ph_t0),
-    avg_ph
-  )) %>%
+  mutate(
+    avg_ph = na_if(avg_ph, "not measured"),
+    
+    avg_ph = if_else(
+      is.na(avg_ph) & cumsum(!is.na(avg_ph)) == 0,
+      as.character(avg_ph_t0),
+      avg_ph
+    ),
+    
+    avg_ph = if_else(
+      rep(all(is.na(avg_ph)), n()),
+      "not measured",
+      avg_ph
+    )
+  ) %>%
   ungroup() %>%
   select(-avg_ph_t0)
 

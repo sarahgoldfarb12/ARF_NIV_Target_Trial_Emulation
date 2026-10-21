@@ -101,3 +101,5 @@ missingness_per_patient_excluding_top5_missing_vars <- tibble(
 
 print(top5_missing_vars)
 print(missingness_per_patient_excluding_top5_missing_vars, n = Inf)
+
+
