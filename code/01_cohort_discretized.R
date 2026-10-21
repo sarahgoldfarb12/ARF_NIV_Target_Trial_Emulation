@@ -2715,8 +2715,12 @@ assembled_df <- assembled_df %>%
       time_to_assignment
     )) %>% 
   mutate(treatment_varying = case_when(treatment == 0L ~ treatment,
-                                       treatment == 1L & time_to_assignment > block_end ~ 0L,
-                                       treatment == 1L & time_to_assignment <= block_end ~ 1L,
+                                       #Preserve the existing exception for placement at exactly hour 24
+                                       treatment == 1L &
+                                          time_to_assignment == block_end &
+                                          time_block == 24 ~ 1L,
+                                       treatment == 1L & time_to_assignment >= block_end ~ 0L,
+                                       treatment == 1L & time_to_assignment < block_end ~ 1L,
                                        TRUE ~ NA_integer_)) %>% 
   rename(treatment_indicator = treatment) 
 
@@ -2792,8 +2796,52 @@ assembled_df <- assembled_df %>%
     death_or_hospice_dttm_by_28d #Fixed dttm outcome variable for death or hospice,, NA if no ICU or stepdown placement.
   )
   
+#Adding lagged variables (lag 1 and lag 2) for all varying characteristics:
+#Lags continue across all available rows, including after placement.
+#Block 1: both lags copy block 1. Block 2: both lags copy block 1.
+#Block 3 onward: copy the preceding one and two blocks, respectively.
+#The default pads unavailable prior rows only; existing missing values are preserved.
 
+varying_cols <- c(
+  "unit_location",
+  "code_status_category",
+  "device_category",
+  "avg_temp",
+  "avg_map",
+  "avg_hr",
+  "avg_sodium",
+  "avg_potassium",
+  "avg_wbc",
+  "avg_bicarb",
+  "avg_lactate",
+  "avg_pco2",
+  "avg_ph",
+  "avg_sf",
+  "avg_pf",
+  "sofa_brain",
+  "sofa_liver",
+  "sofa_coagulation",
+  "sofa_kidney",
+  "antihypertensive_drip",
+  "naloxone"
+)
 
+assembled_df <- assembled_df %>%
+  group_by(patient_id, hospital_block_id) %>%
+  arrange(block_start, .by_group = TRUE) %>%
+  mutate(
+    across(
+      all_of(varying_cols),
+      list(
+        lag1 = ~ dplyr::lag(.x, n = 1L, default = dplyr::first(.x)),
+        lag2 = ~ dplyr::lag(.x, n = 2L, default = dplyr::first(.x))
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  ) %>%
+  ungroup()
+
+rm(varying_cols)
 
 # -----------------  Start constructing assembled_df with baseline characteristics, varying characteristics, and outcome variables for downstream analyses
 
