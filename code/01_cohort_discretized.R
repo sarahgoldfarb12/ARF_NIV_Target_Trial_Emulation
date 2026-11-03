@@ -732,7 +732,7 @@ resp_support <- vary_chars %>%
            hospital_block_id, 
            time_block) %>% 
   filter(recorded_dttm >= block_start & recorded_dttm < block_end) %>% 
-  arrange(desc(recorded_dttm), .by_group = TRUE) %>% #Find the time of the location corresponding to the end of the given 2-hour block.
+  arrange(is.na(device_category), desc(recorded_dttm), .by_group = TRUE) %>% #Find the time of the location corresponding to the end of the given 2-hour block.
   slice(1) %>% 
   ungroup() %>% 
   select(patient_id, 
@@ -770,7 +770,7 @@ resp_support_t0 <- vary_chars %>%
             relationship = "many-to-many") %>%
   filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0) %>% 
   group_by(patient_id, hospital_block_id) %>% 
-  arrange(desc(recorded_dttm), .by_group = TRUE) %>%
+  arrange(is.na(device_category), desc(recorded_dttm), .by_group = TRUE) %>%
   slice(1) %>% 
   ungroup() %>%
   select(patient_id, hospital_block_id, device_category_t0 = device_category)
@@ -1310,7 +1310,7 @@ vary_chars <- vary_chars %>%
     ),
     sofa_brain = if_else(
       rep(all(is.na(sofa_brain)), n()),
-      "not measured",
+      "not measured/unavailable",
       sofa_brain
     )
   ) %>%
@@ -1365,7 +1365,7 @@ vary_chars <- vary_chars %>%
   arrange(time_block, .by_group = TRUE) %>%
   mutate(
     # Restore actual missing values before attempting the baseline fill.
-    sofa_brain = na_if(sofa_brain, "not measured"),
+    sofa_brain = na_if(sofa_brain, "not measured/unavailable"),
     
     # Keep existing baseline-fill rule.
     sofa_brain = if_else(
@@ -1377,7 +1377,7 @@ vary_chars <- vary_chars %>%
     # Label only histories still entirely missing after the fill.
     sofa_brain = if_else(
       rep(all(is.na(sofa_brain)), n()),
-      "not measured",
+      "not measured/unavailable",
       sofa_brain
     )
   ) %>%
@@ -1431,7 +1431,7 @@ vary_chars <- vary_chars %>%
     ),
     sofa_liver = if_else(
       rep(all(is.na(sofa_liver)), n()),
-      "not measured",
+      "not measured/unavailable",
       sofa_liver
     )
   ) %>%
@@ -1485,7 +1485,7 @@ vary_chars <- vary_chars %>%
   group_by(patient_id, hospital_block_id) %>%
   arrange(time_block, .by_group = TRUE) %>%
   mutate(
-    sofa_liver = na_if(sofa_liver, "not measured"),
+    sofa_liver = na_if(sofa_liver, "not measured/unavailable"),
     
     sofa_liver = if_else(
       is.na(sofa_liver) & cumsum(!is.na(sofa_liver)) == 0,
@@ -1495,7 +1495,7 @@ vary_chars <- vary_chars %>%
     
     sofa_liver = if_else(
       rep(all(is.na(sofa_liver)), n()),
-      "not measured",
+      "not measured/unavailable",
       sofa_liver
     )
   ) %>%
@@ -1549,7 +1549,7 @@ vary_chars <- vary_chars %>%
     ),
     sofa_coagulation = if_else(
       rep(all(is.na(sofa_coagulation)), n()),
-      "not measured",
+      "not measured/unavailable",
       sofa_coagulation
     )
   ) %>%
@@ -1603,7 +1603,7 @@ vary_chars <- vary_chars %>%
   group_by(patient_id, hospital_block_id) %>%
   arrange(time_block, .by_group = TRUE) %>%
   mutate(
-    sofa_coagulation = na_if(sofa_coagulation, "not measured"),
+    sofa_coagulation = na_if(sofa_coagulation, "not measured/unavailable"),
     
     sofa_coagulation = if_else(
       is.na(sofa_coagulation) & cumsum(!is.na(sofa_coagulation)) == 0,
@@ -1613,7 +1613,7 @@ vary_chars <- vary_chars %>%
     
     sofa_coagulation = if_else(
       rep(all(is.na(sofa_coagulation)), n()),
-      "not measured",
+      "not measured/unavailable",
       sofa_coagulation
     )
   ) %>%
@@ -1667,7 +1667,7 @@ vary_chars <- vary_chars %>%
     ),
     sofa_kidney = if_else(
       rep(all(is.na(sofa_kidney)), n()),
-      "not measured",
+      "not measured/unavailable",
       sofa_kidney
     )
   ) %>%
@@ -1721,7 +1721,7 @@ vary_chars <- vary_chars %>%
   group_by(patient_id, hospital_block_id) %>%
   arrange(time_block, .by_group = TRUE) %>%
   mutate(
-    sofa_kidney = na_if(sofa_kidney, "not measured"),
+    sofa_kidney = na_if(sofa_kidney, "not measured/unavailable"),
     
     sofa_kidney = if_else(
       is.na(sofa_kidney) & cumsum(!is.na(sofa_kidney)) == 0,
@@ -1731,7 +1731,7 @@ vary_chars <- vary_chars %>%
     
     sofa_kidney = if_else(
       rep(all(is.na(sofa_kidney)), n()),
-      "not measured",
+      "not measured/unavailable",
       sofa_kidney
     )
   ) %>%
@@ -1859,7 +1859,7 @@ vary_chars <- vary_chars %>%
     avg_ph = as.character(avg_ph),
     avg_ph = if_else(
       rep(all(is.na(avg_ph)), n()),
-      "not measured",
+      "not measured/unavailable",
       avg_ph
     )
   ) %>%
@@ -1905,7 +1905,7 @@ vary_chars <- vary_chars %>%
   group_by(patient_id, hospital_block_id) %>%
   arrange(time_block, .by_group = TRUE) %>%
   mutate(
-    avg_ph = na_if(avg_ph, "not measured"),
+    avg_ph = na_if(avg_ph, "not measured/unavailable"),
     
     avg_ph = if_else(
       is.na(avg_ph) & cumsum(!is.na(avg_ph)) == 0,
@@ -1915,7 +1915,7 @@ vary_chars <- vary_chars %>%
     
     avg_ph = if_else(
       rep(all(is.na(avg_ph)), n()),
-      "not measured",
+      "not measured/unavailable",
       avg_ph
     )
   ) %>%
@@ -2848,6 +2848,99 @@ assembled_df <- assembled_df %>%
     discharge_death_hospice_dttm_by_28d, #Fixed dttm outcome variable for death, hospice, or lost to follow up (discharged from hospital), NA if no ICU or stepdown placement.
     death_or_hospice_dttm_by_28d #Fixed dttm outcome variable for death or hospice,, NA if no ICU or stepdown placement.
   )
+
+# -----------------  Start adding catch-all imputation rules
+
+##Categorizing the following variables and impute missingness as a distinct "Not measured/unavailable" category
+##For all categorical variables, Not measured/unavailable is explicitly coded as "Not measured/unavailable"
+##"0" categories in categorical variables do not represent missing measurement
+
+category_vars <- c("avg_pf", "avg_lactate", "avg_sf", "avg_ph", "avg_pco2")
+sofa_vars <- c("sofa_brain", "sofa_liver", "sofa_coagulation", "sofa_kidney")
+
+assembled_df <- assembled_df %>%
+  mutate(across(all_of(category_vars), ~ .x, .names = "{.col}_raw")) %>%
+  mutate(avg_ph = as.numeric(na_if(avg_ph, "not measured/unavailable"))) %>%
+  mutate(
+    #PF: >300=1; 200-300=2; 100-<200=3; <100=4.
+    avg_pf = factor(case_when(
+      is.na(avg_pf) ~ "not measured/unavailable",
+      avg_pf > 300 ~ "1",
+      avg_pf >= 200 ~ "2",
+      avg_pf >= 100 ~ "3",
+      TRUE ~ "4"
+    ), levels = c(1:4, "not measured/unavailable")),
+    
+    #Lactate: <=2=1; >2-3=2; >3-4=3; >4-5=4; >5=5.
+    avg_lactate = factor(case_when(
+      is.na(avg_lactate) ~ "not measured/unavailable",
+      avg_lactate <= 2 ~ "1",
+      avg_lactate <= 3 ~ "2",
+      avg_lactate <= 4 ~ "3",
+      avg_lactate <= 5 ~ "4",
+      TRUE ~ "5"
+    ), levels = c(1:5, "not measured/unavailable")),
+    
+    #SF: >300=1; >250-300=2; >200-250=3; >120-200=4; <=120=5.
+    avg_sf = factor(case_when(
+      is.na(avg_sf) ~ "not measured/unavailable",
+      avg_sf > 300 ~ "1",
+      avg_sf > 250 ~ "2",
+      avg_sf > 200 ~ "3",
+      avg_sf > 120 ~ "4",
+      TRUE ~ "5"
+    ), levels = c(1:5, "not measured/unavailable")),
+    
+    #pH: 7.35-7.45=1; >7.45=2; 7.30-<7.35=3;
+    #7.25-<7.30=4; 7.20-<7.25=5; 7.15-<7.20=6; <7.15=7.
+    avg_ph = factor(case_when(
+      is.na(avg_ph) ~ "not measured/unavailable",
+      avg_ph >= 7.35 & avg_ph <= 7.45 ~ "1",
+      avg_ph > 7.45 ~ "2",
+      avg_ph >= 7.30 ~ "3",
+      avg_ph >= 7.25 ~ "4",
+      avg_ph >= 7.20 ~ "5",
+      avg_ph >= 7.15 ~ "6",
+      TRUE ~ "7"
+    ), levels = c(1:7, "not measured/unavailable")),
+    
+    #PCO2: <25=1; 25-<35=2; 35-45=3; >45-<50=4;
+    #50-<55=5; 55-60=6; >60=7.
+    avg_pco2 = factor(case_when(
+      is.na(avg_pco2) ~ "not measured/unavailable",
+      avg_pco2 < 25 ~ "1",
+      avg_pco2 < 35 ~ "2",
+      avg_pco2 <= 45 ~ "3",
+      avg_pco2 < 50 ~ "4",
+      avg_pco2 < 55 ~ "5",
+      avg_pco2 <= 60 ~ "6",
+      TRUE ~ "7"
+    ), levels = c(1:7, "not measured/unavailable")),
+    
+    #All SOFA variables
+    across(all_of(sofa_vars), ~ factor(
+      coalesce(.x, "not measured/unavailable"),
+      levels = c(as.character(0:4), "not measured/unavailable")))
+  )
+
+##Impute continuous variable missingness as 0 or normal
+## 0 in below continuous variables represent missing measurement 
+fixed_vars <- c("liver_disease", "metastatic_cancer", "pulmonary_vasc", "renal_failure")
+
+assembled_df <- assembled_df %>%
+  mutate(
+    avg_sodium = coalesce(avg_sodium, 0),
+    across(all_of(fixed_vars), ~ coalesce(.x, 0))
+  )
+
+##Impute miscellaneous variables
+
+#All-missing code-status histories also become FULL.
+assembled_df <- assembled_df %>%
+  mutate(code_status_category = coalesce(code_status_category, "FULL"))
+
+# -----------------  Start adding lagging variables
+
   
 #Adding lagged variables (lag 1 and lag 2) for all varying characteristics:
 #Lags continue across all available rows, including after placement.

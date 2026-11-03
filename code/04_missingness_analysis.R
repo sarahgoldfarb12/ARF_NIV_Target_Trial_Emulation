@@ -102,4 +102,38 @@ missingness_per_patient_excluding_top5_missing_vars <- tibble(
 print(top5_missing_vars)
 print(missingness_per_patient_excluding_top5_missing_vars, n = Inf)
 
+# ----------------- Missingness across ALL blocks (grain: person period, NOT patient)
+missing_flags_all <- assembled_df %>%
+  select(all_of(c(fixed_cols, varying_cols))) %>%
+  mutate(across(
+    everything(),
+    ~ is.na(.x) | tolower(trimws(.x)) %in% c("", "na", "n/a", "nan", "<na>", "null",
+                                               "na_character_", "na_real_", "na_integer_", "na_complex_",
+                                               "missing", "not measured", "not recorded",
+                                               "not available", "unavailable")
+  ))
 
+missingness_all_blocks <- tibble(
+  variable = names(missing_flags_all),
+  
+  covariate_type = if_else(
+    variable %in% fixed_cols, "fixed", "varying"
+  ),
+  
+  variable_type = case_when(
+    variable %in% binary_cols ~ "binary",
+    variable %in% c(categorical_cols, "avg_pf", "avg_lactate",
+                    "avg_sf", "avg_ph", "avg_pco2") ~ "categorical",
+    variable %in% c("admission_dttm", "discharge_dttm") ~ "datetime",
+    variable == "elixhauser_count" ~ "count",
+    variable == "elixhauser_index" ~ "numeric score",
+    TRUE ~ "continuous"
+  ),
+  
+  n_rows = nrow(assembled_df),
+  missing_n = colSums(missing_flags_all),
+  missing_pct = round(100 * colMeans(missing_flags_all), 2)
+) %>%
+  arrange(desc(covariate_type), desc(missing_pct), variable)
+
+print(missingness_all_blocks, n = Inf)
