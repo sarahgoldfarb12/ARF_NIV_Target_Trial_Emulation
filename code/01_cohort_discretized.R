@@ -2926,11 +2926,12 @@ assembled_df <- assembled_df %>%
 ##Impute continuous variable missingness as 0 or normal
 ## 0 in below continuous variables represent missing measurement 
 fixed_vars <- c("liver_disease", "metastatic_cancer", "pulmonary_vasc", "renal_failure")
+vars <- c("avg_sodium", fixed_vars)
 
 assembled_df <- assembled_df %>%
+  rename_with(~ paste0(.x, "_raw"), all_of(vars)) %>%
   mutate(
-    avg_sodium = coalesce(avg_sodium, 0),
-    across(all_of(fixed_vars), ~ coalesce(.x, 0))
+    across(all_of(paste0(vars, "_raw")), ~ coalesce(.x, 0))
   )
 
 ##Impute miscellaneous variables
