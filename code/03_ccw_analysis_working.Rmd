@@ -21,7 +21,8 @@ packages <- c(
                   "this.path",
                   "comorbidity",
                   "WeightIt",
-                  "SuperLearner")
+                  "SuperLearner",
+                  "nnet")
     
     install_if_missing <- function(package) {
       if (!require(package, character.only = TRUE)) {
@@ -458,7 +459,10 @@ X_cc$first_hospital_id <- factor(X_cc$first_hospital_id)
 y <- cc_data$adherence_cat
 
 sl_lib <- c("SL.glm", "SL.nnet", "SL.rpart", "SL.randomForest")
+```
 
+
+```{r Calculate Censoring Weights - Using SuperLearner Ensemble Method}
 fits <- setNames(lapply(event_levels, function(k) {
   SuperLearner(
     Y = as.integer(y == k),
@@ -468,8 +472,11 @@ fits <- setNames(lapply(event_levels, function(k) {
   )
 }), event_levels)
 #Temporary Save
-saveRDS(fits, file = paste0(project_location, "private_tables/all_superlearner_fits.rds"))
+#saveRDS(fits, file = paste0(project_location, "private_tables/all_superlearner_fits.rds"))
+```
 
+
+```{r Calculation of Non-Eligible Weights for Those that Develop ICU Indication in the ED}
 # Predicted one-vs-rest probabilities for these rows
 p_raw <- sapply(fits, function(fit) {
   as.numeric(fit$SL.predict)
@@ -489,37 +496,40 @@ raw_probs <- bind_cols(cc_data, p_hat) |>
          still_in_ed_probs=still_in_ed, to_icu_probs=to_icu,
          to_imc_probs=to_imc, to_ward_probs=to_ward) 
 
+#Outcome Only Multinomial Model for Numerator
+numerator_fit <- nnet::multinom(adherence_cat ~ time_block , data=cc_data)
+new_data <- cc_data |>
+  dplyr::distinct(time_block) |>
+  dplyr::arrange(time_block)
+
+num_probs <- predict(
+  numerator_fit,
+  newdata = new_data,
+  type = "probs"
+)
+num_probs <- cbind(new_data, as.data.frame(num_probs)) |>
+  pivot_longer(
+    cols=c("icu_indication", "still_in_ed", "to_icu", "to_imc", "to_ward" ),
+    values_to='numerator_probs',
+    names_to='adherence_cat')
+
 ##Join with Both Arms to Calculate Weights for Each Clone
-both.arms_weighted <- both.arms |>
-  select(hospital_block_id, time_block, icu_arm,  block_status) |>
+both.arms_sl_weights <- both.arms |>
+  select(hospital_block_id, time_block, icu_arm,  unit_location, block_status) |>
   left_join(raw_probs, by=c('hospital_block_id', 'time_block')) |>
+  left_join(cc_data %>% select(hospital_block_id, time_block, adherence_cat), 
+            by=c('hospital_block_id', 'time_block')) |>
   mutate(
-    block_weight=fcase(
+    block_weight_denom=fcase(
       icu_arm==0 & time_block<24, to_imc_probs + still_in_ed_probs + icu_indication_probs,
       icu_arm==0 & time_block==24, to_imc_probs + icu_indication_probs,
       icu_arm==1 & time_block<24, to_icu_probs + still_in_ed_probs + icu_indication_probs,
       icu_arm==1 & time_block==24, to_icu_probs + icu_indication_probs
     )
-  )
-```
+  ) |>
+  left_join(num_probs)
 
-
-```{r Calculate Censoring Weights - Using SuperLearner Ensemble Method}
-(W2 <- weightit(block_status ~ avg_temp + time_block + code_status_category +
-                  avg_map + avg_hr
-                  , data = calc_weights,
-                method = "super", estimand = "ATE",
-                stabilize=T,
-                SL.library = c("SL.nnet", "SL.bayesglm",
-                               "SL.caret.rpart",
-                               "SL.randomForest")))
-```
-
-
-```{r Calculation of Non-Eligible Weights for Those that Develop ICU Indication in the ED}
-
-
-
+write_csv(both.arms_sl_weights, paste0(project_location, '/private_tables/both.arms_sl_weights.csv'))
 ```
 
 ```{r Calculation of Non-Eligible Weights for Those that Remain in ED}
