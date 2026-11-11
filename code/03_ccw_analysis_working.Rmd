@@ -82,10 +82,6 @@ for (filename in filenames) {
 
 #Analytic Plan
 - Primary Approach: Clone Censor Weighting Using Super Learner to Calculate Censoring Weights Based on Pre Triage Trajectory
-- Weighted Pooled Logistic Outcome Regression Controlling for Baseline Variables
-- Secondary: Weighted TMLE outcome regression
-
-
 ```{r Format Assembled DF for Clone Censor Weighting}
 final_cohort <- as.data.table(raw_dfs$no_pandemic_one_encounter_per_patient)
 
@@ -104,7 +100,8 @@ censor_df <- as.data.table(raw_dfs$assembled_df) %>%
     first_icu_indication=coalesce(first_imv_dttm, first_vasoactive_dttm), #For Purposes of this Analysis Assume This is Just Vasopressors and IMV
     #Identify Patients That Develop an ICU Indication While Still in ED (IMV, Vasopressors)
     icu_indication_censor=fifelse(
-      out_of_ed==0L & first_icu_indication<=block_end, 1L, NA_real_
+      out_of_ed==0L & first_icu_indication<=block_end & 
+        first_icu_indication<=time_to_treatment, 1L, NA_real_ #NOte time_to_treatment here is ED triage time
     ),
     temp=fifelse(icu_indication_censor==1L, time_block, NA_real_),
     icu_indication_censor_block=ifelse(is.finite(min(temp, na.rm = TRUE)), min(temp, na.rm = TRUE), NA_real_),
@@ -151,7 +148,7 @@ clone_diagnostics <- data.frame(
   clone = c('clone0', 'clone1'),
   description = c('Not ICU', 'ICU'),
   n_clones_prior_censoring = c(temp0, temp1),
-  n_events_prior_censoring = c(sum(n_events0$n_events, na.rm=T), sum(n_events1$n_events, na.rm=T))
+  n_events_per_arm = c(sum(n_events0$n_events, na.rm=T), sum(n_events1$n_events, na.rm=T))
 )
 
 #Censor Clones When They Are No Longer Adherent to The Strategies of:
@@ -166,17 +163,31 @@ clone0 <- clone0 |>
     censored_reason=fcase(
       first_censored==1L & in_ed_at_24hours==1, 'Still in ED at 24 Hours',
       first_censored==1L & out_of_ed==1 & triage_location=='icu', 'To ICU',
-      first_censored==1L & out_of_ed==1 & triage_location=='ward', 'To Ward'),
+      first_censored==1L & out_of_ed==1 & triage_location=='ward', 'To Ward'
+      ),
     censored=cummax(first_censored), 
     temp_censor=cumsum(censored),
- 
     .by = hospital_block_id
   ) |>
   filter(
     temp_censor<=1, 
     .by = hospital_block_id
   ) |>
-  select(-temp_censor)
+  select(-temp_censor) |>
+  #Create a Block Status Indicating of Clone is Adherent
+  fill(censored_reason, .direction='down', .by=hospital_block_id) |>
+  mutate(
+    block_status=fcase(
+      time_block>=icu_indication_censor_block, 'icu_indication_in_ed',
+      time_block>=triage_block & !is.na(censored_reason), censored_reason,
+      time_block<=triage_block & is.na(censored_reason), 'following_strategy')) |>
+  fill(block_status, .direction='down', .by=hospital_block_id) |>
+  #Meeting an ICU indication is not a censoring event
+  mutate(
+    censored=fifelse(
+      block_status=='icu_indication_in_ed', 0L, censored
+    )
+  )
   
 #--clone1=icu by end of 24 hours OR if develops an ICU indication prior to triage censor
 clone1 <- clone1 |>
@@ -198,39 +209,52 @@ clone1 <- clone1 |>
     temp_censor<=1, 
     .by = hospital_block_id
   ) |>
-  select(-temp_censor)
+  select(-temp_censor) |>
+  #Create a Block Status Indicating of Clone is Adherent
+  fill(censored_reason, .direction='down', .by=hospital_block_id) |>
+  mutate(
+    block_status=fcase(
+      time_block>=icu_indication_censor_block, 'icu_indication_in_ed',
+      time_block>=triage_block & !is.na(censored_reason), censored_reason,
+      time_block<=triage_block & is.na(censored_reason), 'following_strategy')) |>
+  fill(block_status, .direction='down', .by=hospital_block_id)  |>
+#Meeting an ICU indication is not a censoring event
+  mutate(
+    censored=fifelse(
+      block_status=='icu_indication_in_ed', 0L, censored
+    )
+  )
 
-both.arms <- rbind(clone0,clone1)
+#Deal With THose that Leave ED Within 24 Hours
+both.arms <- rbind(clone0,clone1) |>
+  mutate(
+    block_status=fcase(
+      !is.na(block_status), block_status,
+      last_block_was_ed==1 & time_block==max(time_block, na.rm=T), 'Left ED/Hospital Within 24 Hours', 
+      default='following_strategy'),
+    censored=fifelse(
+      last_block_was_ed==1 & time_block==max(time_block, na.rm=T), 1L, censored),
+    .by=hospital_block_id
+  ) 
 ```
 
 ```{r Plot Censoring}
-both.arms.new.cens <- both.arms[which(both.arms$censored==1)]
-both.arms.no.cens <- both.arms
-both.arms.no.cens$censored <- 0
-both.arms.plot <- rbind(both.arms.no.cens, both.arms.new.cens)
-table(both.arms.plot$censored)
-
-# Create a new variable which indicates an individual's status on week k
-both.arms.plot <- both.arms.plot |>
-  mutate(status=fifelse(
-    is.na(censored_reason) & censored==0L, 'Following Assigned Strategy', censored_reason
-  ))
-table(both.arms.plot$status, useNA="always")
+table(both.arms$icu_arm, both.arms$block_status, useNA="always")
 
 # Prep data for plotting
-plot.counts <- both.arms.plot %>% group_by(time_block, status, icu_arm) %>%
+plot.counts <- both.arms %>% group_by(time_block, block_status, icu_arm) %>%
   dplyr::summarize(total_count=n(),
             .groups = 'drop')
 plot.counts$arm_name <- ifelse(plot.counts$icu_arm==0, "Triage to IMC", "Triage to ICU")
 
 # Create plot
-cens_plot <- ggplot(data=plot.counts %>% filter(time_block<=24), aes(x=time_block, y=total_count, fill = as.factor(status))) +
+cens_plot <- ggplot(data=plot.counts %>% filter(time_block<=24), aes(x=time_block, y=total_count, fill = as.factor(block_status))) +
   geom_bar(position="stack", stat="identity") +
   xlab("Hours from Time Zero") + 
   scale_x_continuous(breaks=c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24)) +
   ylab("Number of individuals") + 
   scale_y_continuous(breaks=c(0, 2000, 4000, 6000, 8000, 10000, 12000)) + 
-  scale_fill_manual(values = c("#878787", "#14B5D0", "#E8A33D", "#800000", "black")) + # set colors
+  scale_fill_manual(values = c("#878787", "#14B5D0", "#E8A33D", "#800000", "royalblue", "purple", "black")) + # set colors
   theme_minimal() +
   theme(axis.text = element_text(size=10), 
         legend.position = "bottom",
@@ -310,7 +334,11 @@ ggsave(
   height = 5,
   units ='in',
   path = paste0(project_location, site, '_project_output/graphs/'))
+```
 
+
+
+```{r Censoring Mechanisms as a Table}
 #Create Table for Triage Outcomes (this will define study population)
 to_tab <- c(
   'age',
@@ -353,7 +381,6 @@ factor_vars <- c(
   'triage_location_raw'
 )
 
-
 #Data to Enter are 1 Row Per Patient
 tab_dat <- censor_df |>
   filter(dplyr::row_number()==1, .by=hospital_block_id)
@@ -363,25 +390,129 @@ tab_excel <- print(tab_triage, printToggle = FALSE, nonormal=nonnorm)
 write.csv(tab_excel, file=paste0(project_location, '/', site, '_project_output/triage_locations_raw_table.csv'))
 ```
 
-```{r Lagged Variables for the Covariate History Model}
-#Stabilized Censoring Weights: These are Censoring of Clones that Deviate from Their Assigned Strategy
-analytic_df <- censor_df |>
-  #Create Lagged Versions of Variables - FOR LIZI (for variables in c()), please create lag1 and lag2 versions that are the value from the prior and 2 hour block previously
-  #Variables for Lagging are c('','','','','','','','','','','','','','','','')
-  
 
+```{r Table One For Paper}
 
+```
+
+```{r Covariate and Outcome Relationship}
 
 ```
 
 
-```{r Calculate Censoring Weights - 1st Parametrically}
 
+```{r Calculate Censoring Weights - 1st With Ensemble Method}
+#Only Need to Calculate Weights Through Triage Block
+calc_weights <- both.arms |>
+  filter(icu_arm==1,
+         time_block<=triage_block) |>
+  #These are the 5 Mutually Exclusive Classes at the End of Each Block
+  mutate(
+    adherence_cat=fcase(
+      icu_indication_censor==1, 'icu_indication',
+      unit_location=='ed', 'still_in_ed',
+      unit_location=='icu', 'to_icu',
+      unit_location=='stepdown', 'to_imc',
+      unit_location=='ward', 'to_ward'
+    )
+  )
+event_levels <- c(
+  "icu_indication", "still_in_ed", "to_icu", "to_imc", "to_ward"
+)
+
+calc_weights$adherence_cat <- factor(
+  calc_weights$adherence_cat,
+  levels = event_levels
+)
+
+table(calc_weights$adherence_cat, useNA = "ifany")
+
+#Use a One vs All Multiclass Prediction Using a SuperLearner Ensemble Method
+#These are the Covariates Outlined in the DAG
+predictor_names <- c(
+  "age", "pulmonary_vasc_raw", "renal_failure_raw",
+  "liver_disease_raw", "metastatic_cancer_raw",
+  "elixhauser_index", "first_hospital_id", "year",
+  "avg_temp", "avg_temp_lag1", "avg_temp_lag2",
+  "time_block", "code_status_category"
+)
+
+# Keep complete cases for the outcome and every model predictor
+cc_data <- calc_weights |>
+  mutate(adherence_cat = factor(adherence_cat, levels = event_levels)) |>
+  filter(
+    !is.na(adherence_cat),
+    if_all(all_of(predictor_names), ~ !is.na(.x))
+  )
+
+# Check how many rows and events remain
+nrow(calc_weights)
+nrow(cc_data)
+table(cc_data$adherence_cat)
+
+X_cc <- as.data.frame(cc_data[, ..predictor_names])
+X_cc$time_block <- factor(X_cc$time_block)
+X_cc$code_status_category <- factor(X_cc$code_status_category)
+X_cc$first_hospital_id <- factor(X_cc$first_hospital_id)
+
+y <- cc_data$adherence_cat
+
+sl_lib <- c("SL.glm", "SL.nnet", "SL.rpart", "SL.randomForest")
+
+fits <- setNames(lapply(event_levels, function(k) {
+  SuperLearner(
+    Y = as.integer(y == k),
+    X = X_cc,
+    family = binomial(),
+    SL.library = sl_lib
+  )
+}), event_levels)
+#Temporary Save
+saveRDS(fits, file = paste0(project_location, "private_tables/all_superlearner_fits.rds"))
+
+# Predicted one-vs-rest probabilities for these rows
+p_raw <- sapply(fits, function(fit) {
+  as.numeric(fit$SL.predict)
+})
+colnames(p_raw) <- event_levels
+
+# Convert to a proper five-class probability vector
+p_hat <- as.data.frame(p_raw / rowSums(p_raw))
+
+# Check probabilities
+range(rowSums(p_hat), na.rm = TRUE)
+summary(p_hat)
+
+#CC_Data
+raw_probs <- bind_cols(cc_data, p_hat) |>
+  select(hospital_block_id, time_block, icu_indication_probs=icu_indication, 
+         still_in_ed_probs=still_in_ed, to_icu_probs=to_icu,
+         to_imc_probs=to_imc, to_ward_probs=to_ward) 
+
+##Join with Both Arms to Calculate Weights for Each Clone
+both.arms_weighted <- both.arms |>
+  select(hospital_block_id, time_block, icu_arm,  block_status) |>
+  left_join(raw_probs, by=c('hospital_block_id', 'time_block')) |>
+  mutate(
+    block_weight=fcase(
+      icu_arm==0 & time_block<24, to_imc_probs + still_in_ed_probs + icu_indication_probs,
+      icu_arm==0 & time_block==24, to_imc_probs + icu_indication_probs,
+      icu_arm==1 & time_block<24, to_icu_probs + still_in_ed_probs + icu_indication_probs,
+      icu_arm==1 & time_block==24, to_icu_probs + icu_indication_probs
+    )
+  )
 ```
 
 
 ```{r Calculate Censoring Weights - Using SuperLearner Ensemble Method}
-
+(W2 <- weightit(block_status ~ avg_temp + time_block + code_status_category +
+                  avg_map + avg_hr
+                  , data = calc_weights,
+                method = "super", estimand = "ATE",
+                stabilize=T,
+                SL.library = c("SL.nnet", "SL.bayesglm",
+                               "SL.caret.rpart",
+                               "SL.randomForest")))
 ```
 
 
