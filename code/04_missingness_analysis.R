@@ -137,3 +137,57 @@ missingness_all_blocks <- tibble(
   arrange(desc(covariate_type), desc(missing_pct), variable)
 
 print(missingness_all_blocks, n = Inf)
+
+# ----------------- Residual missingness by missingness type (all blocks missing or some missing) on the patient level
+
+missing_vars <- c(
+  "avg_wbc", "avg_potassium", "avg_bicarb",
+  "avg_temp", "avg_map"
+)
+
+# Count missing time blocks separately for each patient and variable
+patient_missingness <- assembled_df %>%
+  select(patient_id, all_of(missing_vars)) %>%
+  tidyr::pivot_longer(
+    cols = all_of(missing_vars),
+    names_to = "variable",
+    values_to = "value"
+  ) %>%
+  group_by(patient_id, variable) %>%
+  summarise(
+    n_blocks = n(),
+    n_missing = sum(is.na(value)),
+    .groups = "drop"
+  )
+
+# Restrict the denominator to patients with any missingness
+missing_pattern_summary <- patient_missingness %>%
+  filter(n_missing > 0) %>%
+  group_by(variable) %>%
+  summarise(
+    patients_with_missing = n(),
+    all_missing_n = sum(n_missing == n_blocks),
+    some_missing_n = sum(n_missing < n_blocks),
+    all_missing_pct = round(
+      100 * all_missing_n / patients_with_missing, 2
+    ),
+    some_missing_pct = round(
+      100 * some_missing_n / patients_with_missing, 2
+    ),
+    .groups = "drop"
+  )
+
+n_patients <- n_distinct(assembled_df$patient_id)
+
+missing_pattern_summary <- missing_pattern_summary %>%
+  mutate(
+    total_patients = n_patients,
+    all_missing_pct = round(
+      100 * all_missing_n / total_patients, 2
+    ),
+    some_missing_pct = round(
+      100 * some_missing_n / total_patients, 2
+    )
+  )
+
+missing_pattern_summary
