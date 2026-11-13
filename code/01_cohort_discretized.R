@@ -274,6 +274,9 @@
 }# -------  End setup
 
 
+# Pre-t_0 borrowing uses final_cohort$start_ed, the ADT-derived ED arrival
+# exported by 00, matched by patient_id and hospital_block_id.
+
 # -----------------  Defining baseline table
 
 baseline_chars <- final_cohort |>
@@ -536,16 +539,15 @@ vary_chars <- vary_chars %>% #Add back dropped rows and apply imputation (carry 
   select(-start_dttm, -end_dttm) %>%
   ungroup() 
 
-#Borrow code status from admission to t_0 for remaining leading missing code_status_category
+#Borrow code status from ADT ED arrival (start_ed) to t_0 for remaining leading missing code_status_category
 code_status_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_code_status %>% 
               collect() %>%
               distinct(),
@@ -554,7 +556,7 @@ code_status_t0 <- vary_chars %>%
   group_by(patient_id, hospital_block_id) %>%
   arrange(start_dttm, .by_group = TRUE) %>%
   mutate(end_dttm = lead(start_dttm)) %>%
-  filter(start_dttm >= admission_dttm & start_dttm <= t_0) %>%
+  filter(start_dttm >= start_ed & start_dttm <= t_0) %>%
   arrange(desc(start_dttm), .by_group = TRUE) %>%
   slice(1) %>%
   ungroup() %>%
@@ -606,16 +608,15 @@ vary_chars <- vary_chars %>%
   ungroup()
 
 
-#Borrow temp from admission to t_0 for remaining leading missing temp
+#Borrow temp from ADT ED arrival (start_ed) to t_0 for remaining leading missing temp
 temp_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_vitals %>% 
               collect() %>% 
               select(patient_id,
@@ -627,7 +628,7 @@ temp_t0 <- vary_chars %>%
               distinct(),
             by = "patient_id",
             relationship = "many-to-many") %>%
-  filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0) %>% 
+  filter(recorded_dttm >= start_ed & recorded_dttm <= t_0) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(temp_t0 = mean(vital_value, na.rm = TRUE),
             .groups = "drop")
@@ -677,16 +678,15 @@ vary_chars <- vary_chars %>%
   tidyr::fill(avg_map, .direction = "down") %>%
   ungroup()
 
-#Borrow MAP from admission to t_0 for remaining leading missing avg_map
+#Borrow MAP from ADT ED arrival (start_ed) to t_0 for remaining leading missing avg_map
 map_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_vitals %>% 
               collect() %>% 
               select(patient_id,
@@ -698,7 +698,7 @@ map_t0 <- vary_chars %>%
               distinct(),
             by = "patient_id",
             relationship = "many-to-many") %>%
-  filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0) %>% 
+  filter(recorded_dttm >= start_ed & recorded_dttm <= t_0) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(avg_map_t0 = mean(vital_value, na.rm = TRUE),
             .groups = "drop")
@@ -750,16 +750,15 @@ vary_chars <- vary_chars %>%
   tidyr::fill(device_category, .direction = "down") %>%
   ungroup()
 
-#Borrow resp device from admission to t_0 for remaining leading missing device_category
+#Borrow resp device from ADT ED arrival (start_ed) to t_0 for remaining leading missing device_category
 resp_support_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_respiratory_support %>% 
               collect() %>% 
               select(patient_id,
@@ -768,7 +767,7 @@ resp_support_t0 <- vary_chars %>%
               distinct(),
             by = "patient_id",
             relationship = "many-to-many") %>%
-  filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0) %>% 
+  filter(recorded_dttm >= start_ed & recorded_dttm <= t_0) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   arrange(is.na(device_category), desc(recorded_dttm), .by_group = TRUE) %>%
   slice(1) %>% 
@@ -820,16 +819,15 @@ vary_chars <- vary_chars %>%
   tidyr::fill(avg_hr, .direction = "down") %>%
   ungroup() 
 
-#Borrow heart rate from admission to t_0 for remaining leading missing avg_hr
+#Borrow heart rate from ADT ED arrival (start_ed) to t_0 for remaining leading missing avg_hr
 hr_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_vitals %>% 
               collect() %>% 
               select(patient_id,
@@ -841,7 +839,7 @@ hr_t0 <- vary_chars %>%
               distinct(),
             by = "patient_id",
             relationship = "many-to-many") %>%
-  filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0) %>% 
+  filter(recorded_dttm >= start_ed & recorded_dttm <= t_0) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(avg_hr_t0 = mean(vital_value, na.rm = TRUE),
             .groups = "drop")
@@ -898,16 +896,15 @@ vary_chars <- vary_chars %>%
   tidyr::fill(avg_sodium, .direction = "down") %>%
   ungroup() 
 
-#Borrow sodium from admission to t_0 for remaining missing avg_sodium
+#Borrow sodium from ADT ED arrival (start_ed) to t_0 for remaining missing avg_sodium
 sodium_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_labs %>% 
               collect() %>% 
               select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
@@ -921,7 +918,7 @@ sodium_t0 <- vary_chars %>%
       NA_real_
     )
   ) %>% 
-  filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+  filter(lab_collect_dttm >= start_ed & lab_collect_dttm <= t_0,
          sodium >= SODIUM_MIN & sodium <= SODIUM_MAX) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(avg_sodium_t0 = mean(sodium, na.rm = TRUE),
@@ -979,16 +976,15 @@ vary_chars <- vary_chars %>%
   tidyr::fill(avg_potassium, .direction = "down") %>%
   ungroup() 
 
-#Borrow potassium from admission to t_0 for remaining missing avg_potassium
+#Borrow potassium from ADT ED arrival (start_ed) to t_0 for remaining missing avg_potassium
 potassium_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_labs %>% 
               collect() %>% 
               select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
@@ -1002,7 +998,7 @@ potassium_t0 <- vary_chars %>%
       NA_real_
     )
   ) %>% 
-  filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+  filter(lab_collect_dttm >= start_ed & lab_collect_dttm <= t_0,
          potassium >= POTASSIUM_MIN & potassium <= POTASSIUM_MAX) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(avg_potassium_t0 = mean(potassium, na.rm = TRUE),
@@ -1060,16 +1056,15 @@ vary_chars <- vary_chars %>%
   tidyr::fill(avg_wbc, .direction = "down") %>%
   ungroup()
 
-#Borrow WBC from admission to t_0 for remaining missing avg_wbc
+#Borrow WBC from ADT ED arrival (start_ed) to t_0 for remaining missing avg_wbc
 wbc_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_labs %>% 
               collect() %>% 
               select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
@@ -1083,7 +1078,7 @@ wbc_t0 <- vary_chars %>%
       NA_real_
     )
   ) %>% 
-  filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+  filter(lab_collect_dttm >= start_ed & lab_collect_dttm <= t_0,
          wbc >= WBC_MIN & wbc <= WBC_MAX) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(avg_wbc_t0 = mean(wbc, na.rm = TRUE),
@@ -1140,16 +1135,15 @@ vary_chars <- vary_chars %>%
   tidyr::fill(avg_bicarb, .direction = "down") %>%
   ungroup()
 
-#Borrow bicarb from admission to t_0 for remaining missing avg_bicarb
+#Borrow bicarb from ADT ED arrival (start_ed) to t_0 for remaining missing avg_bicarb
 bicarb_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_labs %>% 
               collect() %>% 
               select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
@@ -1163,7 +1157,7 @@ bicarb_t0 <- vary_chars %>%
       NA_real_
     )
   ) %>% 
-  filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+  filter(lab_collect_dttm >= start_ed & lab_collect_dttm <= t_0,
          bicarb >= BICARB_MIN & bicarb <= BICARB_MAX) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(avg_bicarb_t0 = mean(bicarb, na.rm = TRUE),
@@ -1220,16 +1214,15 @@ vary_chars <- vary_chars %>%
   tidyr::fill(avg_lactate, .direction = "down") %>%
   ungroup()
 
-#Borrow lactate from admission to t_0 for remaining missing avg_lactate
+#Borrow lactate from ADT ED arrival (start_ed) to t_0 for remaining missing avg_lactate
 lactate_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_labs %>% 
               collect() %>% 
               select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
@@ -1243,7 +1236,7 @@ lactate_t0 <- vary_chars %>%
       NA_real_
     )
   ) %>% 
-  filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+  filter(lab_collect_dttm >= start_ed & lab_collect_dttm <= t_0,
          lactate >= LACTATE_MIN & lactate <= LACTATE_MAX) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(avg_lactate_t0 = mean(lactate, na.rm = TRUE),
@@ -1317,16 +1310,15 @@ vary_chars <- vary_chars %>%
   ungroup() %>% 
   select(-avg_gcs)
 
-#Borrow GCS from admission to t_0 for remaining missing sofa_brain
+#Borrow GCS from ADT ED arrival (start_ed) to t_0 for remaining missing sofa_brain
 gcs_total_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_patient_assessments %>% 
               collect() %>% 
               select(patient_id, recorded_dttm, assessment_category, numerical_value) %>%
@@ -1340,7 +1332,7 @@ gcs_total_t0 <- vary_chars %>%
       NA_real_
     )
   ) %>% 
-  filter(recorded_dttm >= admission_dttm & recorded_dttm <= t_0,
+  filter(recorded_dttm >= start_ed & recorded_dttm <= t_0,
          gcs_total >= GCS_MIN & gcs_total <= GCS_MAX) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(avg_gcs_t0 = mean(gcs_total, na.rm = TRUE),
@@ -1438,16 +1430,15 @@ vary_chars <- vary_chars %>%
   ungroup() %>% 
   select(-bilirubin_total)
 
-#Borrow bilirubin from admission to t_0 for remaining missing sofa_liver
+#Borrow bilirubin from ADT ED arrival (start_ed) to t_0 for remaining missing sofa_liver
 bilirubin_total_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_labs %>% 
               collect() %>% 
               select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
@@ -1461,7 +1452,7 @@ bilirubin_total_t0 <- vary_chars %>%
       NA_real_
     )
   ) %>% 
-  filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+  filter(lab_collect_dttm >= start_ed & lab_collect_dttm <= t_0,
          bilirubin_total >= BILIRUBIN_MIN & bilirubin_total <= BILIRUBIN_MAX) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(bilirubin_total_t0 = mean(bilirubin_total, na.rm = TRUE),
@@ -1556,16 +1547,15 @@ vary_chars <- vary_chars %>%
   ungroup() %>% 
   select(-platelet_count)
 
-#Borrow platelet count from admission to t_0 for remaining missing sofa_coagulation
+#Borrow platelet count from ADT ED arrival (start_ed) to t_0 for remaining missing sofa_coagulation
 platelet_count_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_labs %>% 
               collect() %>% 
               select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
@@ -1579,7 +1569,7 @@ platelet_count_t0 <- vary_chars %>%
       NA_real_
     )
   ) %>% 
-  filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+  filter(lab_collect_dttm >= start_ed & lab_collect_dttm <= t_0,
          platelet_count >= PLATELET_MIN & platelet_count <= PLATELET_MAX) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(platelet_count_t0 = mean(platelet_count, na.rm = TRUE),
@@ -1674,16 +1664,15 @@ vary_chars <- vary_chars %>%
   ungroup() %>% 
   select(-avg_creatinine)
 
-#Borrow creatinine from admission to t_0 for remaining missing sofa_kidney
+#Borrow creatinine from ADT ED arrival (start_ed) to t_0 for remaining missing sofa_kidney
 creatinine_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_labs %>% 
               collect() %>% 
               select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
@@ -1697,7 +1686,7 @@ creatinine_t0 <- vary_chars %>%
       NA_real_
     )
   ) %>% 
-  filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+  filter(lab_collect_dttm >= start_ed & lab_collect_dttm <= t_0,
          creatinine >= CREATININE_MIN & creatinine <= CREATININE_MAX) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(avg_creatinine_t0 = mean(creatinine, na.rm = TRUE),
@@ -1776,16 +1765,15 @@ vary_chars <- vary_chars %>%
   tidyr::fill(avg_pco2, .direction = "down") %>%
   ungroup()
 
-#Borrow PCO2 from admission to t_0 for remaining missing avg_pco2
+#Borrow PCO2 from ADT ED arrival (start_ed) to t_0 for remaining missing avg_pco2
 pco2_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_labs %>% 
               collect() %>% 
               select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
@@ -1799,7 +1787,7 @@ pco2_t0 <- vary_chars %>%
       NA_real_
     )
   ) %>% 
-  filter(lab_collect_dttm >= admission_dttm & lab_collect_dttm <= t_0,
+  filter(lab_collect_dttm >= start_ed & lab_collect_dttm <= t_0,
          pco2 >= PCO2_MIN & pco2 <= PCO2_MAX) %>% 
   group_by(patient_id, hospital_block_id) %>% 
   summarise(avg_pco2_t0 = mean(pco2, na.rm = TRUE),
@@ -1865,15 +1853,15 @@ vary_chars <- vary_chars %>%
   ) %>%
   ungroup()
 
+#Borrow pH from ADT ED arrival (start_ed) to t_0 for remaining missing avg_ph
 ph_t0 <- vary_chars %>% 
   filter(time_block == 0) %>%
-  select(patient_id, hospital_block_id, hospitalization_id, t_0) %>%
+  select(patient_id, hospital_block_id, t_0) %>%
   distinct() %>%
-  left_join(clif_hospitalization %>%
-              select(patient_id, hospitalization_id, admission_dttm) %>%
-              collect() %>%
+  left_join(final_cohort %>%
+              select(patient_id, hospital_block_id, start_ed) %>%
               distinct(),
-            by = c("patient_id", "hospitalization_id")) %>%
+            by = c("patient_id", "hospital_block_id")) %>%
   left_join(clif_labs %>% 
               collect() %>% 
               select(patient_id, lab_collect_dttm, lab_category, lab_value, lab_value_numeric) %>%
@@ -1888,7 +1876,7 @@ ph_t0 <- vary_chars %>%
     )
   ) %>% 
   filter(
-    lab_collect_dttm >= admission_dttm,
+    lab_collect_dttm >= start_ed,
     lab_collect_dttm <= t_0,
     ph >= PH_MIN,
     ph <= PH_MAX
@@ -2565,28 +2553,28 @@ outcomes_chars <- outcomes_chars %>%
          #As specified, outcome events are counted only among patients who were placed in the ICU or stepdown unit. Patients without ICU/stepdown placement are not
          #considered at risk for the primary outcome.
          death_or_hospice_dttm_by_28d = case_when(
-            treatment %in% c(0L, 1L) ~ death_or_hospice_dttm_by_28d,
-            TRUE ~ as.POSIXct(NA)
-          ),
+           treatment %in% c(0L, 1L) ~ death_or_hospice_dttm_by_28d,
+           TRUE ~ as.POSIXct(NA)
+         ),
          death_dttm_by_28d = case_when(
-            treatment %in% c(0L, 1L) ~ death_dttm_by_28d,
-            TRUE ~ as.POSIXct(NA)
-          ),
+           treatment %in% c(0L, 1L) ~ death_dttm_by_28d,
+           TRUE ~ as.POSIXct(NA)
+         ),
          hospice_discharge_dttm_by_28d = case_when(
-            treatment %in% c(0L, 1L) ~ hospice_discharge_dttm_by_28d,
-            TRUE ~ as.POSIXct(NA)
-          ),
+           treatment %in% c(0L, 1L) ~ hospice_discharge_dttm_by_28d,
+           TRUE ~ as.POSIXct(NA)
+         ),
          discharge_censor_dttm_by_28d = case_when(
            treatment %in% c(0L, 1L) &
              !is.na(discharge_censor_dttm_by_28d) &
              !is.na(time_to_assignment) &
              discharge_censor_dttm_by_28d < time_to_assignment ~ as.POSIXct(NA),
            TRUE ~ discharge_censor_dttm_by_28d)
-         ) %>%
+  ) %>%
   mutate(
     #As specified, only in-hospital death, hospice discharge, or censoring due to
     #discharge from hospital within 28 days from the start of follow-up contributes to the primary outcome.
-
+    
     #Note: Although intermediate variables from the mortality_hospice and discharge_censor tables have the suffix _by_28d, 
     #they are formally restricted to the 28-day follow-up window in the below section. Variable naming will be improved in the next iteration.
     
@@ -2770,8 +2758,8 @@ assembled_df <- assembled_df %>%
   mutate(treatment_varying = case_when(treatment == 0L ~ treatment,
                                        #Preserve the existing exception for placement at exactly hour 24
                                        treatment == 1L &
-                                          time_to_assignment == block_end &
-                                          time_block == 24 ~ 1L,
+                                         time_to_assignment == block_end &
+                                         time_block == 24 ~ 1L,
                                        treatment == 1L & time_to_assignment >= block_end ~ 0L,
                                        treatment == 1L & time_to_assignment < block_end ~ 1L,
                                        TRUE ~ NA_integer_)) %>% 
@@ -2821,7 +2809,7 @@ assembled_df <- assembled_df %>%
     discharge_dttm,
     discharge_category,
     age,
-   
+    
     pulmonary_vasc,
     renal_failure,
     liver_disease,
@@ -2834,7 +2822,7 @@ assembled_df <- assembled_df %>%
     first_trach_dttm,
     first_vasoactive_dttm,
     first_crrt_dttm,
-  
+    
     #Treatment variables
     treatment_indicator, #Fixed ICU vs. Stepdown indicator at the patient-level. NA if no ICU or stepdown placement.
     treatment_transition_path, #Fixed treatment transition path at the patient-level (e.g., from ED to Ward or ED to ICU), the number of NA should be 0.
@@ -2844,7 +2832,7 @@ assembled_df <- assembled_df %>%
     
     #Outcome variables
     death_or_hospice_by_28d, #Time-varying outcome variable: among those with eventual ICU or Stepdown placement, 0 = event not yet observed during person-time-period, 1 = event observed. NA if no ICU or stepdown placement.
-                             #Patient stop contributing to the risk set once this variable becomes 1 for those who experienced event.
+    #Patient stop contributing to the risk set once this variable becomes 1 for those who experienced event.
     discharge_death_hospice_dttm_by_28d, #Fixed dttm outcome variable for death, hospice, or lost to follow up (discharged from hospital), NA if no ICU or stepdown placement.
     death_or_hospice_dttm_by_28d #Fixed dttm outcome variable for death or hospice,, NA if no ICU or stepdown placement.
   )
@@ -2944,7 +2932,7 @@ assembled_df <- assembled_df %>%
 
 # -----------------  Start adding lagging variables
 
-  
+
 #Adding lagged variables (lag 1 and lag 2) for all varying characteristics:
 #Lags continue across all available rows, including after placement.
 #Block 1: both lags copy block 1. Block 2: both lags copy block 1.

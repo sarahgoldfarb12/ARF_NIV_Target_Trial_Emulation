@@ -334,9 +334,10 @@
 
 }
 
-# Save separate capacity outputs; leave the analytical cohort outputs intact.
-capacity_output_dir <- file.path(project_location, paste0(site, "_project_output"),
-                                 "capacity")
-dir.create(capacity_output_dir, recursive = TRUE, showWarnings = FALSE)
-fwrite(capacity_wide, file.path(capacity_output_dir, "hospital_capacity.csv"))
-fwrite(daily_capacity_ratio, file.path(capacity_output_dir, "daily_capacity_ratio.csv"))
+# Save capacity ratio outputs
+  write.csv(
+    daily_capacity_ratio,
+    file = paste0(project_location, "/private_tables/daily_capacity_ratio.csv"),
+    row.names = FALSE
+  )    
+
