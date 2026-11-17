@@ -5,7 +5,7 @@
 #' output: html_document
 #' ---
 #' 
-## ----Install Packages---------------------------------------------------------
+ ## ----Install Packages---------------------------------------------------------
 packages <- c(
                   "lubridate", 
                   "tidyverse", 
@@ -20,7 +20,10 @@ packages <- c(
                   "yaml",
                   "this.path",
                   "comorbidity",
-                  "WeightIt"
+                  "WeightIt",
+                  "tidytable",
+                  "future",
+                  "ranger"
                   )
                   #"SuperLearner",
                   #"nnet")
@@ -38,13 +41,14 @@ packages <- c(
   if (!requireNamespace("tlverse", quietly = TRUE)) {
     if (!requireNamespace("devtools", quietly = TRUE)) {
       install.packages("devtools")
-  }
+    } 
+    devtools::install_github("tlverse/tlverse")
+   }
 
-  devtools::install_github("tlverse/tlverse")
   library(tlverse)
-    }
-  
-#' 
+  library(sl3)
+##--- 
+
 ## ----Globally Defined Variables-----------------------------------------------
 MAX_FU = 24*28 # Maximum Amount of Follow-up in Hours at 28 Days
 
@@ -53,7 +57,7 @@ MAX_FU = 24*28 # Maximum Amount of Follow-up in Hours at 28 Days
 #' 
 ## ----Read in Config-----------------------------------------------------------
 # Find project root
-project_root <- dirname(dirname(this.path()))
+project_root <- normalizePath(getwd())
     
     # Read YAML config
 config <- yaml::read_yaml(file.path(project_root, "config", "config.yaml"))
@@ -70,7 +74,6 @@ file_type <- config$file_type
 if (!dir.exists(paste0(project_location, "/", site, "_project_output/graphs"))) {
       dir.create(paste0(project_location,"/", site, "_project_output/graphs"))
 }
-
 #' 
 ## ----Load in Data-------------------------------------------------------------
 filenames <- list.files(
@@ -252,9 +255,8 @@ both.arms <- rbind(clone0,clone1) |>
 table(both.arms$icu_arm, both.arms$block_status, useNA="always")
 
 # Prep data for plotting
-plot.counts <- both.arms %>% group_by(time_block, block_status, icu_arm) %>%
-  dplyr::summarize(total_count=n(),
-            .groups = 'drop')
+plot.counts <- both.arms |>
+  dplyr::count(time_block, block_status, icu_arm, name = "total_count")
 plot.counts$arm_name <- ifelse(plot.counts$icu_arm==0, "Triage to IMC", "Triage to ICU")
 
 # Create plot
@@ -307,9 +309,7 @@ triage_outcome_df <- censor_df |>
   filter(time_block<=triage_block | is.na(triage_block))
 
 triage_outcome_plot <- triage_outcome_df |>
-  group_by(time_block, block_status) |>
-  dplyr::summarize(total_count=n(),
-            .groups = 'drop')
+  dplyr::count(time_block, block_status, name = "total_count")
 
 triage_plot <- ggplot(data=triage_outcome_plot %>% filter(time_block<=24), aes(x=time_block, y=total_count, fill =   as.factor(block_status))) +
   geom_bar(position="stack", stat="identity") +
@@ -472,6 +472,70 @@ y <- cc_data$adherence_cat
 #' 
 #' 
 ## ----Calculate Censoring Weights - Using SuperLearner Ensemble Method---------
+# 1. Enable parallel processing across available CPU cores
+plan(multisession, workers = availableCores() - 1)
+
+# 2. Define Task Predicting Probability of Disposition/Censoring
+task <- make_sl3_Task(
+  data = calc_weights,
+  covariates = predictor_names,
+  outcome = "adherence_cat", 
+  outcome_type='categorical'
+)
+
+# 3. Include a preprocessing learner (Lrnr_one_hot) if you have factor/character predictors
+# (Or skip Lrnr_nnet and stick to learners that handle factors natively)
+lrnr_glmnet_lasso <- make_learner(Lrnr_glmnet, alpha = 1) #Lasso Regression
+lrnr_glmnet_ridge <- make_learner(Lrnr_glmnet, alpha = 0) #Ridge Regression
+lrnr_glmnet_enet  <- make_learner(Lrnr_glmnet, alpha = 0.5) #Elastic Net Regression
+lrnr_indbinomial  <- make_learner(Lrnr_independent_binomial) #Multinomal Implementation of Logit Model
+lrnr_rf           <- make_learner(Lrnr_ranger, num.trees = 500, min.node.size = 10) #Faster Random Forests
+lrnr_xgb_shallow  <- make_learner(Lrnr_xgboost, nrounds = 150, max_depth = 3, eta = 0.05, tree_method = "hist") #Xgboost
+lrnr_xgb_deep     <- make_learner(Lrnr_xgboost, nrounds = 150, max_depth = 6, eta = 0.05, tree_method = "hist") #Xgboost
+lrnr_multinom     <- make_learner(Lrnr_nnet, size = 5,
+  decay = 0.01,
+  maxit = 500,
+  entropy = TRUE,
+  trace = FALSE) #Feed-Foward Neuroal Networks
+lrnr_rpart        <- make_learner(Lrnr_rpart)
+lrnr_mean         <- make_learner(Lrnr_mean) #Mean Model - Other Models Should outperform this
+
+stack <- Stack$new(
+  lrnr_glmnet_lasso,
+  lrnr_glmnet_ridge,
+  lrnr_glmnet_enet,
+  lrnr_indbinomial,
+  lrnr_rf,
+  lrnr_xgb_shallow,
+  lrnr_xgb_deep,
+  lrnr_multinom,
+  lrnr_rpart,
+  lrnr_mean
+)
+
+# 2. Use Lrnr_optim (uses R's built-in optim() instead of buggy Rsolnp!)
+safe_combiner <- function(alpha, X) {
+  w <- exp(alpha - max(alpha)) / sum(exp(alpha - max(alpha))) #SOFT Max Function
+  sl3:::metalearner_linear_multinomial(w, X)
+}
+
+metalearner <- make_learner(
+  Lrnr_optim,
+  loss_function = loss_loglik_multinomial,
+  learner_function = safe_combiner
+)
+
+# 3. Train the Super Learner
+sl <- make_learner(Lrnr_sl, learners = stack, metalearner = metalearner)
+sl_fit <- sl$train(task)
+
+# 4. Inspect balanced weights & predictions
+alpha <- sl_fit$coefficients
+true_weights <- exp(alpha - max(alpha)) / sum(exp(alpha - max(alpha)))
+print(round(true_weights, 6))
+
+probs <- unpack_predictions(sl_fit$predict())
+head(probs)
 
 #Temporary Save
 #saveRDS(fits, file = paste0(project_location, "private_tables/all_superlearner_fits.rds"))
