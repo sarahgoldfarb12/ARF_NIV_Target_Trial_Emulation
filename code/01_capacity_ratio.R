@@ -298,7 +298,10 @@
   
   # Expands multiple rows (# of days) per group, similar to reframe() in dplyr
   patient_days <- day_ranges[, .(
-    calendar_date = seq.Date(first_date, last_date, by = "day")
+  calendar_date = as.Date(
+    as.integer(seq.Date(as.Date(first_date), as.Date(last_date), by = "day")),
+    origin = "1970-01-01"
+  )
   ), by = .(patient_id, hospital_id, location_lower, first_date, last_date)]
   
   # Exact counting key: patient * hospital * calendar date * ICU/IMC.
