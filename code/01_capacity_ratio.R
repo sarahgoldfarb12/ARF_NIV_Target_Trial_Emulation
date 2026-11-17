@@ -4,7 +4,7 @@
 { # -------  Setup
   
   { # -----------------  Loading the required packages -----------------
-    packages <- c("duckdb", 
+    packages <- c( 
                   "lubridate", 
                   "tidyverse", 
                   "dplyr",
@@ -246,6 +246,7 @@
   )
   
   # Everything up until this point should be identical with existing general ETL pipeline
+}
 
 { # ------- ICU/IMC ADT intervals and unique patient-days
   
@@ -340,4 +341,3 @@
     file = paste0(project_location, "/private_tables/daily_capacity_ratio.csv"),
     row.names = FALSE
   )    
-

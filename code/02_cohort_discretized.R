@@ -6,7 +6,7 @@
   cat("Setup...\n")
   
   { # -----------------  Loading the required packages -----------------
-    packages <- c("duckdb", 
+    packages <- c(
                   "lubridate", 
                   "tidyverse", 
                   "dplyr",
