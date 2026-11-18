@@ -167,11 +167,11 @@ clone_diagnostics <- data.frame(
 #Censor Clones When They Are No Longer Adherent to The Strategies of:
 #--clone0=imc by end of 24 hours OR if develops an ICU indication prior to triage censor
 clone0 <- clone0 |>
-  #Censor if in ICU before hour 24
+  #Censor if in ICU before hour 24 (for IMC clone); Unless they had an ICU indication
   mutate(
     first_censored=fcase(
       time_block>=24 & in_ed_at_24hours==1, 1L,
-      (icu_arm==0 & triage_location!='stepdown' & is_first_non_ed==1), 1L,
+      (icu_arm==0 & triage_location!='stepdown' & is_first_non_ed==1 & icu_indication_in_ed==0L), 1L,
       default = 0L),
     censored_reason=fcase(
       first_censored==1L & in_ed_at_24hours==1, 'Still in ED at 24 Hours',
