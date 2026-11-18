@@ -118,7 +118,7 @@ censor_df <- as.data.table(raw_dfs$assembled_df) %>%
     ),
     temp=fifelse(icu_indication_censor==1L, time_block, NA_real_),
     icu_indication_censor_block=ifelse(is.finite(min(temp, na.rm = TRUE)), min(temp, na.rm = TRUE), NA_real_),
-    icu_indication_in_ed=fifelse(!is.na(icu_indication_censor_block), 1L, 0L),
+    icu_indication_in_ed=fifelse((!is.na(icu_indication_censor_block) & icu_indication_censor_block<=24), 1L, 0L, 0L),
     .by = hospital_block_id
   ) |>
   fill(triage_location, in_ed_at_24hours, icu_indication_in_ed, last_block_was_ed, .direction=c('downup'), .by = hospital_block_id) |>
