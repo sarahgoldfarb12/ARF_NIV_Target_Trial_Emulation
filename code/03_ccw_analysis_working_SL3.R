@@ -7,6 +7,7 @@
 #' 
  ## ----Install Packages---------------------------------------------------------
 packages <- c(
+                  "tidytable",
                   "lubridate", 
                   "tidyverse", 
                   "dplyr",
@@ -21,7 +22,6 @@ packages <- c(
                   "this.path",
                   "comorbidity",
                   "WeightIt",
-                  "tidytable",
                   "future",
                   "ranger"
                   )
