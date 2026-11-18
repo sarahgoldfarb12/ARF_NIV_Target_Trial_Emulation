@@ -446,29 +446,6 @@ predictor_names <- c(
   "avg_temp", "avg_temp_lag1", "avg_temp_lag2",
   "time_block", "code_status_category"
 )
-
-# Keep complete cases for the outcome and every model predictor
-cc_data <- calc_weights |>
-  mutate(adherence_cat = factor(adherence_cat, levels = event_levels)) |>
-  filter(
-    !is.na(adherence_cat),
-    if_all(all_of(predictor_names), ~ !is.na(.x))
-  )
-
-# Check how many rows and events remain
-nrow(calc_weights)
-nrow(cc_data)
-table(cc_data$adherence_cat)
-
-X_cc <- as.data.frame(cc_data[, ..predictor_names])
-X_cc$time_block <- factor(X_cc$time_block)
-X_cc$code_status_category <- factor(X_cc$code_status_category)
-X_cc$first_hospital_id <- factor(X_cc$first_hospital_id)
-
-y <- cc_data$adherence_cat
-
-
-
 #' 
 #' 
 ## ----Calculate Censoring Weights - Using SuperLearner Ensemble Method---------
@@ -530,41 +507,51 @@ sl <- make_learner(Lrnr_sl, learners = stack, metalearner = metalearner)
 sl_fit <- sl$train(task)
 
 # 4. Inspect balanced weights & predictions
-alpha <- sl_fit$coefficients
-true_weights <- exp(alpha - max(alpha)) / sum(exp(alpha - max(alpha)))
-print(round(true_weights, 6))
+alpha <- data.frame(
+  coefficient = sl_fit$coefficients
+) |>
+  tibble::rownames_to_column("learner")
 
-probs <- unpack_predictions(sl_fit$predict())
-head(probs)
+true_weights <- data.frame(
+  true_weight = round(
+    exp(alpha$coefficient - max(alpha$coefficient)) /
+      sum(exp(alpha$coefficient - max(alpha$coefficient))),
+    6
+  )
+)
 
-#Temporary Save
-#saveRDS(fits, file = paste0(project_location, "private_tables/all_superlearner_fits.rds"))
+sl_fit_coefficients <- dplyr::bind_cols(alpha, true_weights)
+write_csv(sl_fit_coefficients, paste0(project_location, site, '_project_output/sl_fit_coefficients.csv' ))
+print(sl_fit)
+
+#Get Predictions
+probs <- as.data.frame(
+  sl3::unpack_predictions(sl_fit$predict(task))
+)
+
+#Save for Intermediate Processing
+#Merge with IDs
+prediction_ids <- calc_weights |>
+   select(hospital_block_id, time_block)
+stopifnot(nrow(prediction_ids) == nrow(probs))
+predictions_with_ids <- dplyr::bind_cols(prediction_ids, probs)
+
+#Save Probability 
+write_csv(predictions_with_ids, 
+paste0(project_location, site, '_project_output/sl_fit_probabilities.csv' ))
 
 #' 
 #' 
 ## ----Calculation of Non-Eligible Weights for Those that Develop ICU Indication in the ED----
-# Predicted one-vs-rest probabilities for these rows
-p_raw <- sapply(fits, function(fit) {
-  as.numeric(fit$SL.predict)
-})
-colnames(p_raw) <- event_levels
-
-# Convert to a proper five-class probability vector
-p_hat <- as.data.frame(p_raw / rowSums(p_raw))
-
-# Check probabilities
-range(rowSums(p_hat), na.rm = TRUE)
-summary(p_hat)
-
-#CC_Data
-raw_probs <- bind_cols(cc_data, p_hat) |>
+raw_probs <- calc_weights |>
+  left_join(predictions_with_ids, by=c('hospital_block_id', 'time_block')) |>
   select(hospital_block_id, time_block, icu_indication_probs=icu_indication, 
          still_in_ed_probs=still_in_ed, to_icu_probs=to_icu,
          to_imc_probs=to_imc, to_ward_probs=to_ward) 
 
 #Outcome Only Multinomial Model for Numerator
-numerator_fit <- nnet::multinom(adherence_cat ~ time_block , data=cc_data)
-new_data <- cc_data |>
+numerator_fit <- nnet::multinom(adherence_cat ~ time_block , data=calc_weights)
+new_data <- calc_weights |>
   dplyr::distinct(time_block) |>
   dplyr::arrange(time_block)
 
@@ -583,7 +570,7 @@ num_probs <- cbind(new_data, as.data.frame(num_probs)) |>
 both.arms_sl_weights <- both.arms |>
   select(hospital_block_id, time_block, icu_arm,  unit_location, block_status) |>
   left_join(raw_probs, by=c('hospital_block_id', 'time_block')) |>
-  left_join(cc_data %>% select(hospital_block_id, time_block, adherence_cat), 
+  left_join(calc_weights %>% select(hospital_block_id, time_block, adherence_cat), 
             by=c('hospital_block_id', 'time_block')) |>
   mutate(
     block_weight_denom=fcase(
